@@ -1,6 +1,8 @@
 import "server-only";
 import type { Interview } from "@/db/schema";
 import { startQuestionTool } from "@/lib/realtime/question-protocol";
+import { OPENAI_BASE_URL } from "./openai";
+import { getOpenAIApiKey } from "./settings";
 
 /** R-4: 전사 모델이 군말을 지우는 경향이 있어 그대로 적도록 지시한다(효과는 실측 필요). */
 const TRANSCRIPTION_PROMPT =
@@ -50,11 +52,11 @@ export function buildRealtimeSession(interview: Interview) {
   };
 }
 
-export const OPENAI_BASE_URL = () => process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+export { OPENAI_BASE_URL };
 
 /** 서버에서 Realtime 통화를 끊는다 (WebRTC·SIP 공통). 실패해도 예외를 던지지 않는다. */
 export async function hangupCall(callId: string) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = await getOpenAIApiKey();
   if (!apiKey) return false;
   try {
     const response = await fetch(`${OPENAI_BASE_URL()}/realtime/calls/${encodeURIComponent(callId)}/hangup`, {

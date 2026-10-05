@@ -26,14 +26,15 @@ npm run dev
 - `DATABASE_URL` 호스트가 `localhost`면 node-postgres, 그 외(Neon)는 `@neondatabase/serverless` 드라이버를 쓴다.
 - 프롬프트 시드는 `/prompts`나 `/interviews/new`를 처음 열 때 들어간다.
 - `BLOB_READ_WRITE_TOKEN`이 없으면 녹음 업로드가 503으로 실패하고, 녹음은 브라우저(IndexedDB)에 남는다. 다시 보기 화면에서 로컬 녹음으로 재생·내려받기가 된다.
+- OpenAI API 키는 **설정 > OpenAI API 키**에서 등록한다(DB에 AES-256-GCM으로 암호화 저장, 암호화 키는 `SESSION_SECRET`에서 파생). 환경변수 `OPENAI_API_KEY`는 등록된 키가 없을 때만 쓴다. `SESSION_SECRET`을 바꾸면 키를 다시 등록해야 한다.
 - `OPENAI_BASE_URL`은 테스트용 목 서버를 가리킬 때만 쓴다.
 
 ## 배포 (Vercel + Neon)
 
 1. Neon 프로젝트를 만들고 `DATABASE_URL`을 받은 뒤 `npm run db:migrate`.
 2. Vercel 프로젝트 루트를 `web/`으로 설정하고 Blob 스토어를 연결(`BLOB_READ_WRITE_TOKEN` 자동 주입).
-3. 환경변수: `DATABASE_URL`, `OPENAI_API_KEY`, `OPENAI_REALTIME_MODEL`, `OPENAI_TRANSCRIBE_MODEL`, `QUESTIONS_API_KEY`(선택), `APP_PASSWORD`, `SESSION_SECRET`, `CRON_SECRET`.
-4. OpenAI에서 이 앱 전용 프로젝트를 만들고 월 예산 한도를 건다(PRD 10절).
+3. 환경변수: `DATABASE_URL`, `OPENAI_REALTIME_MODEL`, `OPENAI_TRANSCRIBE_MODEL`, `QUESTIONS_API_KEY`(선택), `APP_PASSWORD`, `SESSION_SECRET`, `CRON_SECRET`. (`OPENAI_API_KEY`는 선택: 설정 화면에서 등록한 키가 우선)
+4. OpenAI에서 이 앱 전용 프로젝트를 만들고 월 예산 한도를 건 뒤(PRD 10절), 그 키를 **설정 > OpenAI API 키**에 등록한다.
 5. 서버 쪽 비용 상한 cron (`GET /api/cron/realtime-guard`, `Authorization: Bearer $CRON_SECRET`):
    - **Vercel Pro**: `web/vercel.json`에 아래를 추가한다. Vercel Cron이 `CRON_SECRET`을 Bearer로 붙여 호출한다.
      ```json

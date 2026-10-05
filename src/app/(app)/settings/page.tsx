@@ -4,16 +4,32 @@ import { PageHeader } from "@/components/page-header";
 import { listApiTokens } from "@/server/api-tokens";
 import { requestOrigin } from "@/server/origin";
 import { listProfiles } from "@/server/profiles";
+import { getOpenAIKeyStatus } from "@/server/settings";
 import { makeDefaultProfile } from "./actions";
 import { ApiTokens } from "./api-tokens";
+import { OpenAIKey } from "./openai-key";
 
 export default async function SettingsPage() {
   await connection();
-  const [profiles, tokens, origin] = await Promise.all([listProfiles(), listApiTokens(), requestOrigin()]);
+  const [profiles, tokens, origin, openaiKey] = await Promise.all([
+    listProfiles(),
+    listApiTokens(),
+    requestOrigin(),
+    getOpenAIKeyStatus(),
+  ]);
   return (
     <>
       <PageHeader title="설정" />
-      <section>
+      <section id="openai">
+        <div className="mb-3">
+          <h2 className="font-semibold">OpenAI API 키</h2>
+          <p className="text-sm text-muted">
+            모의 면접(Realtime)에 쓰는 키입니다. 계정에 저장되며, 면접을 시작하려면 반드시 등록해야 합니다.
+          </p>
+        </div>
+        <OpenAIKey status={openaiKey} />
+      </section>
+      <section className="mt-10">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
             <h2 className="font-semibold">지원자 정보</h2>

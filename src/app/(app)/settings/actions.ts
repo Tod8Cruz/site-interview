@@ -6,6 +6,7 @@ import { z } from "zod";
 import { formatZodError } from "@/lib/validation";
 import { createApiToken, deleteApiToken } from "@/server/api-tokens";
 import { createProfile, deleteProfile, setDefaultProfile, updateProfile } from "@/server/profiles";
+import { clearOpenAIApiKey, SettingsError, setOpenAIApiKey } from "@/server/settings";
 
 export type ProfileFormState = { error?: string };
 
@@ -57,5 +58,23 @@ export async function issueApiToken(_prev: ApiTokenFormState, formData: FormData
 
 export async function revokeApiToken(id: string) {
   await deleteApiToken(id);
+  revalidatePath("/settings");
+}
+
+export type OpenAIKeyFormState = { error?: string; saved?: string };
+
+export async function saveOpenAIKey(_prev: OpenAIKeyFormState, formData: FormData): Promise<OpenAIKeyFormState> {
+  try {
+    const hint = await setOpenAIApiKey(String(formData.get("apiKey") ?? ""));
+    revalidatePath("/settings");
+    return { saved: hint };
+  } catch (error) {
+    if (error instanceof SettingsError) return { error: error.message };
+    throw error;
+  }
+}
+
+export async function removeOpenAIKey() {
+  await clearOpenAIApiKey();
   revalidatePath("/settings");
 }

@@ -4,15 +4,16 @@ import { interviews } from "@/db/schema";
 import { buildRealtimeSession, hangupCall, OPENAI_BASE_URL } from "@/server/realtime";
 import { isUuid, jsonError } from "@/server/http";
 import { getInterview } from "@/server/interviews";
-
+import { OPENAI_NOT_CONFIGURED_MESSAGE } from "@/server/openai";
+import { getOpenAIApiKey } from "@/server/settings";
 
 /**
  * R-1: 브라우저의 SDP offer를 받아 서버가 OpenAI에 대신 전달한다(unified 방식).
- * OpenAI API 키는 브라우저에 노출되지 않고, 서버는 call id를 얻어 저장한다(서버 쪽 종료용).
+ * OpenAI API 키는 설정(DB, 암호화)에서 읽으며 브라우저에 노출되지 않고, 서버는 call id를 얻어 저장한다(서버 쪽 종료용).
  */
 export async function POST(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return jsonError(503, "openai_not_configured", "OPENAI_API_KEY가 설정되지 않았습니다.");
+  const apiKey = await getOpenAIApiKey();
+  if (!apiKey) return jsonError(503, "openai_not_configured", OPENAI_NOT_CONFIGURED_MESSAGE);
 
   const interviewId = new URL(request.url).searchParams.get("interviewId") ?? "";
   if (!isUuid(interviewId)) return jsonError(400, "bad_request", "interviewId가 필요합니다.");

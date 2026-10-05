@@ -178,6 +178,19 @@ export const apiTokens = pgTable("api_tokens", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * 계정 단위 설정(키-값). 비밀값(예: OpenAI API 키)은 서버에서 암호화해 넣는다.
+ * 이 앱은 단일 계정이므로 사용자 컬럼 없이 키 하나당 한 행이다.
+ */
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
 export type Question = typeof questions.$inferSelect;
 export type Prompt = typeof prompts.$inferSelect;
 export type CandidateProfile = typeof candidateProfiles.$inferSelect;
