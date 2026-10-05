@@ -81,9 +81,16 @@ body {
   }
 }
 
-/* Chrome 기본 오디오 컨트롤은 회색 패널이라 진행 막대가 잘 안 보인다. */
-audio::-webkit-media-controls-panel {
-  background-color: #ffffff;
+/* 재생 위치 막대 — 재생한 부분은 primary, 남은 부분은 surface(흰색). --progress는 인라인으로 넣는다. */
+.seek {
+  @apply h-1.5 w-full cursor-pointer appearance-none rounded-full border border-border;
+  background: linear-gradient(to right, var(--primary) var(--progress, 0%), var(--surface) var(--progress, 0%));
+}
+.seek::-webkit-slider-thumb {
+  @apply size-3.5 appearance-none rounded-full border-2 border-surface bg-primary shadow;
+}
+.seek::-moz-range-thumb {
+  @apply size-3.5 rounded-full border-2 border-surface bg-primary shadow;
 }
 
 /* /api-docs — Markdown 컴포넌트 위에 문서용 크기·표·코드 블록을 얹는다. */

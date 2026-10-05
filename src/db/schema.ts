@@ -71,7 +71,8 @@ export const candidateProfiles = pgTable(
   (t) => [uniqueIndex("candidate_profiles_single_default").on(t.isDefault).where(sql`${t.isDefault}`)],
 );
 
-export type InterviewStatus = "in_progress" | "completed" | "aborted";
+/** in_progress → paused → in_progress … → completed | aborted. paused는 통화가 없는 상태로, 비용이 들지 않는다. */
+export type InterviewStatus = "in_progress" | "paused" | "completed" | "aborted";
 export type AudioStatus = "none" | "pending" | "uploaded" | "failed";
 
 export const interviews = pgTable(
@@ -97,16 +98,44 @@ export const interviews = pgTable(
     voice: text("voice").notNull(),
     maxMinutes: integer("max_minutes").notNull(),
     realtimeCallId: text("realtime_call_id"),
+    /** 현재(또는 마지막) 통화 구간이 연결된 시각. 재개할 때마다 다시 잡힌다. */
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
+    /** 마지막으로 일시정지한 시각. 재개하면 비운다. */
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+    /** 누적 진행 시간(ms). 일시정지·종료 때 기록하며, 재개한 구간의 시계는 이 값에서 이어진다. */
     durationMs: integer("duration_ms"),
+    /** 일시정지 시점에 진행 중이던 예상 질문 번호(0부터). 인사 단계면 null. */
+    currentQuestionIndex: integer("current_question_index"),
+    /** 모든 녹음 구간의 집계 상태 */
     audioStatus: text("audio_status").$type<AudioStatus>().notNull().default("none"),
-    audioUrl: text("audio_url"),
-    audioPathname: text("audio_pathname"),
-    audioBytes: integer("audio_bytes"),
     ...timestamps,
   },
   (t) => [index("interviews_status_idx").on(t.status)],
+);
+
+/**
+ * 녹음 구간. 통화 구간(시작~일시정지, 재개~종료)마다 파일 하나씩 Vercel Blob에 둔다.
+ * start_ms는 누적 진행 시계에서 이 구간이 시작하는 지점이라, 턴의 start_ms로 구간을 찾을 수 있다.
+ */
+export const interviewRecordings = pgTable(
+  "interview_recordings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    interviewId: uuid("interview_id")
+      .notNull()
+      .references(() => interviews.id, { onDelete: "cascade" }),
+    /** 구간 순서 (0부터) */
+    seq: integer("seq").notNull(),
+    startMs: integer("start_ms").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    mimeType: text("mime_type").notNull(),
+    url: text("url").notNull(),
+    pathname: text("pathname").notNull(),
+    bytes: integer("bytes").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("interview_recordings_seq_unique").on(t.interviewId, t.seq)],
 );
 
 export type TurnRole = "interviewer" | "candidate";
@@ -127,6 +156,8 @@ export const interviewTurns = pgTable(
     interrupted: boolean("interrupted").notNull().default(false),
     note: text("note"),
     noteQuestionId: uuid("note_question_id").references(() => questions.id, { onDelete: "set null" }),
+    /** 이 턴이 속한 예상 질문 (면접 중 start_question 도구로 파악) */
+    questionId: uuid("question_id").references(() => questions.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -152,4 +183,5 @@ export type Prompt = typeof prompts.$inferSelect;
 export type CandidateProfile = typeof candidateProfiles.$inferSelect;
 export type Interview = typeof interviews.$inferSelect;
 export type InterviewTurn = typeof interviewTurns.$inferSelect;
+export type InterviewRecording = typeof interviewRecordings.$inferSelect;
 export type ApiToken = typeof apiTokens.$inferSelect;

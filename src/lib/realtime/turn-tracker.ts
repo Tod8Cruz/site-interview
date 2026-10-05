@@ -10,6 +10,8 @@ export type FinalTurn = {
   endMs: number;
   itemId: string | null;
   interrupted: boolean;
+  /** 이 턴이 속한 예상 질문 (start_question 도구로 파악, 없으면 null) */
+  questionId: string | null;
 };
 
 export type LiveTurn = {
@@ -28,6 +30,7 @@ type CandidateState = {
   text: string;
   transcribed: boolean;
   emitted: boolean;
+  questionId?: string | null;
 };
 
 type InterviewerState = {
@@ -42,6 +45,7 @@ type InterviewerState = {
   audioDone: boolean;
   interrupted: boolean;
   emitted: boolean;
+  questionId?: string | null;
 };
 
 export type ServerEvent = { type: string; [key: string]: unknown };
@@ -65,6 +69,8 @@ export class TurnTracker {
   constructor(
     private readonly now: () => number,
     private readonly listener: Listener,
+    /** 지금 진행 중인 예상 질문 id. 지원자 턴은 말을 시작한 시점, 면접관 턴은 response.done 시점 값을 쓴다. */
+    private readonly questionId: () => string | null = () => null,
   ) {}
 
   handle(event: ServerEvent) {
@@ -73,6 +79,7 @@ export class TurnTracker {
       case "input_audio_buffer.speech_started": {
         const c = this.candidate(s("item_id"));
         c.startMs = this.now();
+        c.questionId = this.questionId();
         this.candidateSpeaking = true;
         break;
       }
@@ -144,6 +151,8 @@ export class TurnTracker {
         if (!response.id) break;
         const r = this.interviewer(response.id);
         if (response.status === "cancelled") r.interrupted = true;
+        // 세션이 같은 응답의 start_question 호출을 먼저 처리하므로, 이 시점 값이 "이 응답이 꺼낸 질문"이다.
+        r.questionId = this.questionId();
         r.transcriptDone = true;
         // 오디오 재생이 시작되지 않았다면 이후에도 시작되지 않는다.
         if (!r.audioStarted) r.audioDone = true;
@@ -247,6 +256,7 @@ export class TurnTracker {
       endMs: Math.max(c.startMs, c.endMs),
       itemId: c.itemId === "unknown" ? null : c.itemId,
       interrupted: false,
+      questionId: c.questionId ?? this.questionId(),
     });
   }
 
@@ -262,6 +272,7 @@ export class TurnTracker {
       endMs: Math.max(startMs, r.endMs ?? this.now()),
       itemId: r.itemId ?? null,
       interrupted: r.interrupted,
+      questionId: r.questionId ?? this.questionId(),
     });
   }
 }

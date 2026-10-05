@@ -1,5 +1,6 @@
 import "server-only";
 import type { Interview } from "@/db/schema";
+import { startQuestionTool } from "@/lib/realtime/question-protocol";
 
 /** R-4: 전사 모델이 군말을 지우는 경향이 있어 그대로 적도록 지시한다(효과는 실측 필요). */
 const TRANSCRIPTION_PROMPT =
@@ -13,24 +14,27 @@ function turnDetection(snapshot: Interview["turnDetection"]) {
       prefix_padding_ms: 300,
       silence_duration_ms: snapshot.silenceMs,
       create_response: true,
-      interrupt_response: true,
+      interrupt_response: false, // 반이중: 면접관이 말하는 동안 클라이언트가 마이크를 닫는다
     };
   }
   return {
     type: "semantic_vad",
     eagerness: snapshot.eagerness,
     create_response: true,
-    interrupt_response: true,
+    interrupt_response: false, // 반이중: 면접관이 말하는 동안 클라이언트가 마이크를 닫는다
   };
 }
 
 /** OpenAI Realtime 세션 설정 (session.type = "realtime") */
 export function buildRealtimeSession(interview: Interview) {
+  const questionCount = interview.questionIds.length;
   return {
     type: "realtime",
     model: interview.model,
     instructions: interview.instructions,
     output_modalities: ["audio"],
+    // 질문 진행 파악용 도구. 프로토콜 문구는 createInterview가 instructions에 붙인다.
+    ...(questionCount > 0 ? { tools: [startQuestionTool(questionCount)], tool_choice: "auto" } : {}),
     audio: {
       input: {
         noise_reduction: { type: "near_field" },

@@ -47,6 +47,7 @@ export default async function InterviewPage(props: PageProps<"/interviews/[id]">
           interrupted: t.interrupted,
           note: t.note,
           noteQuestionId: t.noteQuestionId,
+          questionId: t.questionId,
         }))}
       />
       <details className="card mt-4 p-4 text-sm">

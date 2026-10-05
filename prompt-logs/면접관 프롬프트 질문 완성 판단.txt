@@ -2,3 +2,29 @@
 
 [2026-10-06 05:48:51] 여기까지 커밋
 
+[2026-10-06 05:50:39] 질문을 순서대로 하면서 면접 진행 과정에서 사이드바에 현재 진행 중인 질문을 표시하고 싶다면 어떻게 해야 할까?
+
+[2026-10-06 06:05:01] realtime api를 쓰는게 아니라, TTS/STT를 쓰면 더 간단하게 다음 질문으로 넘어갈 수 있지 않나? LLM 응답에 응답 텍스트 + 턴 넘김 여부를 넣어서.
+
+[2026-10-06 06:08:41] 테스트에 대한 이야기가 아니라, 내가 NPM run dev를 해서 서버를 띄워도 function calling동작한다는 뜻? function calling 이 api방식이 아냐?
+
+[2026-10-06 06:09:44] 그러니까. 브라우저랑 openai가 통신하는거야? 그리고 그 function calling정보가 또 next.js 서버로 가는거고?
+
+[2026-10-06 06:10:13] 그럼 vercel에 배포하면 음성 하는 내내 function이 실행중이어야 하나?
+
+[2026-10-06 06:10:48] 좋아. 일단 function calling으로 진행하자.
+
+[2026-10-06 06:14:07] <task-notification>
+<task-id>b6k44dvgt</task-id>
+<tool-use-id>toolu_017tcfXgR7L5CvDqDuFnVKEf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tod-projects-site-interview/fd496a8d-a356-4eb9-b754-0ee73d8c8db6/tasks/b6k44dvgt.output</output-file>
+<status>completed</status>
+<summary>Background command "Start Next.js dev server on port 3077 in the background" completed (exit code 0)</summary>
+</task-notification>
+
+[2026-10-06 06:20:28] 프롬프트를 어떻게 바꾼건지는 모르겠지만, 질문 내용을 넌무 그대로 물어보는데? 
+말투를 일치화 했으면 좋겠어. 자연스럽게 존칭어로 대화하다가, 교사가 되려는 이유는? 이라고 하기 보다는 교사가 되려는 이유는 무엇인가요? 라고 물어보는게 좋겠는데. 
+그리고 function calling은 어디 정의된거?
+
+[2026-10-06 06:22:56] 이거 풀 듀플렉스로 하지 말고, 면접관이 말 할 때는 내 마이크를 끄자.
+

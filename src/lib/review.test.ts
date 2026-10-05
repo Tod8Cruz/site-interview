@@ -9,6 +9,7 @@ const turn = (p: Partial<ReviewTurn> & Pick<ReviewTurn, "role" | "startMs">): Re
   interrupted: false,
   note: null,
   noteQuestionId: null,
+  questionId: null,
   ...p,
 });
 
@@ -30,6 +31,23 @@ test("suggestQuestion: 직전 면접관 발화와 가장 비슷한 질문을 고
   assert.equal(suggestQuestion(turns, 1, questions), "q2");
   assert.equal(suggestQuestion([turns[1]], 0, questions), null);
   assert.equal(suggestQuestion([turn({ role: "interviewer", startMs: 0, text: "날씨가 좋네요" })], 0, questions), null);
+});
+
+test("suggestQuestion: 면접 중 기록된 질문이 유사도보다 우선한다", () => {
+  const questions = [
+    { id: "q1", question: "지원동기를 말씀해 주세요." },
+    { id: "q2", question: "학창 시절 갈등을 해결한 경험은?" },
+  ];
+  const turns = [
+    turn({ role: "interviewer", startMs: 0, text: "학창 시절에 갈등을 해결해 본 경험이 있나요?", questionId: "q1" }),
+    turn({ role: "candidate", startMs: 3000, text: "네 저는" }),
+    turn({ role: "candidate", startMs: 6000, text: "그리고", questionId: "q2" }),
+  ];
+  assert.equal(suggestQuestion(turns, 0, questions), "q1");
+  assert.equal(suggestQuestion(turns, 1, questions), "q1", "지원자 턴은 직전 면접관 턴의 기록을 따른다");
+  assert.equal(suggestQuestion(turns, 2, questions), "q2", "자기 턴의 기록이 먼저다");
+  const unknown = [turn({ role: "interviewer", startMs: 0, text: "갈등 해결 경험은?", questionId: "deleted" })];
+  assert.equal(suggestQuestion(unknown, 0, questions), "q2", "목록에 없는 id면 유사도로 돌아간다");
 });
 
 test("answerMetrics: 답변 길이와 첫마디까지 걸린 시간", () => {

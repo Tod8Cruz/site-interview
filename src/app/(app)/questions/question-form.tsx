@@ -17,7 +17,7 @@ export function QuestionForm({ question, categories }: { question?: Question; ca
           defaultValue={question?.question} className="input" />
       </div>
       <div>
-        <label className="label" htmlFor="modelAnswer">모범답변 <span className="font-normal text-muted">(마크다운)</span></label>
+        <label className="label" htmlFor="modelAnswer">모범답안 <span className="font-normal text-muted">(마크다운)</span></label>
         <textarea id="modelAnswer" name="modelAnswer" rows={12} maxLength={20000}
           defaultValue={question?.modelAnswer} className="input font-mono" />
       </div>

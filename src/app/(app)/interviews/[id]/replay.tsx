@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AudioStatus } from "@/db/schema";
 import { formatDuration } from "@/lib/format";
 import { loadRecording } from "@/lib/recorder/chunk-store";
@@ -27,7 +27,8 @@ type Props = {
 };
 
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}초`;
-const average = (values: number[]) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : null);
+const RATES = [1, 1.25, 1.5, 2];
+const average =(values: number[]) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : null);
 
 export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initialTurns, questions }: Props) {
   const router = useRouter();
@@ -36,6 +37,9 @@ export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initi
   const [localUrl, setLocalUrl] = useState<string | null>(null);
   const [hasLocal, setHasLocal] = useState(false);
   const [currentMs, setCurrentMs] = useState(0);
+  const [durationMs, setDurationMs] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [rate, setRate] = useState(1);
   const [uploadState, setUploadState] = useState<{ busy: boolean; error?: string }>({ busy: false });
   const [copied, setCopied] = useState(false);
 
@@ -93,6 +97,19 @@ export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initi
     void audio.play();
   }
 
+  function togglePlay() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) void audio.play();
+    else audio.pause();
+  }
+
+  function cycleRate() {
+    const next = RATES[(RATES.indexOf(rate) + 1) % RATES.length];
+    if (audioRef.current) audioRef.current.playbackRate = next;
+    setRate(next);
+  }
+
   async function retryUpload() {
     setUploadState({ busy: true });
     const result = await uploadRecording(interviewId);
@@ -126,14 +143,51 @@ export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initi
     <div className="space-y-4">
       <div className="card sticky top-16 z-[5] p-3">
         {src ? (
-          <audio
-            ref={audioRef}
-            src={src}
-            controls
-            preload="metadata"
-            className="w-full"
-            onTimeUpdate={(e) => setCurrentMs(e.currentTarget.currentTime * 1000)}
-          />
+          <div className="flex items-center gap-3 rounded-full bg-surface-2 px-3 py-2">
+            <audio
+              ref={audioRef}
+              src={src}
+              preload="metadata"
+              onTimeUpdate={(e) => setCurrentMs(e.currentTarget.currentTime * 1000)}
+              onDurationChange={(e) => {
+                const d = e.currentTarget.duration;
+                setDurationMs(Number.isFinite(d) ? d * 1000 : 0);
+              }}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onEnded={() => setPlaying(false)}
+            />
+            <button
+              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-fg hover:opacity-90"
+              onClick={togglePlay}
+              aria-label={playing ? "일시정지" : "재생"}
+            >
+              <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden>
+                {playing ? <path d="M4 3h3v10H4zM9 3h3v10H9z" /> : <path d="M4.5 2.5v11l9-5.5z" />}
+              </svg>
+            </button>
+            <span className="shrink-0 text-xs tabular-nums text-muted">
+              {formatDuration(currentMs)} / {formatDuration(durationMs)}
+            </span>
+            <input
+              type="range"
+              className="seek"
+              min={0}
+              max={durationMs || 1}
+              step={100}
+              value={Math.min(currentMs, durationMs)}
+              disabled={!durationMs}
+              onChange={(e) => {
+                const audio = audioRef.current;
+                if (audio) audio.currentTime = Number(e.target.value) / 1000;
+              }}
+              style={{ "--progress": `${durationMs ? (currentMs / durationMs) * 100 : 0}%` } as CSSProperties}
+              aria-label="재생 위치"
+            />
+            <button className="btn btn-sm shrink-0 tabular-nums" onClick={cycleRate} aria-label="재생 속도">
+              {rate}x
+            </button>
+          </div>
         ) : (
           <p className="p-2 text-sm text-muted">
             {audioStatus === "none" ? "이 면접에는 녹음이 없습니다." : "녹음을 찾는 중이거나 이 브라우저에 없습니다."}

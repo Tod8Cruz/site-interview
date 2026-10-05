@@ -17,7 +17,7 @@ export function formatDateTime(date: Date | string) {
   }).format(new Date(date));
 }
 
-export const STATUS_LABEL = { in_progress: "진행중", completed: "완료", aborted: "중단" } as const;
+export const STATUS_LABEL = { in_progress: "진행중", paused: "일시정지", completed: "완료", aborted: "중단" } as const;
 export const AUDIO_LABEL = {
   uploaded: "녹음 있음",
   pending: "업로드 대기",

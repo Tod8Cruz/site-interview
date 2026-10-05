@@ -5,9 +5,12 @@ import { useState } from "react";
 import { Markdown } from "@/components/markdown";
 import type { Question } from "@/db/schema";
 
+/** 이 길이를 넘는 모범답안은 접어 두고 "더 보기"로 펼친다. */
+const COLLAPSE_CHARS = 400;
+
 export function QuestionList({ questions }: { questions: Question[] }) {
   const [hideAnswers, setHideAnswers] = useState(false);
-  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
 
   if (!questions.length) {
@@ -19,8 +22,8 @@ export function QuestionList({ questions }: { questions: Question[] }) {
     );
   }
 
-  const toggle = (id: string) =>
-    setOpen((prev) => {
+  const toggleExpanded = (id: string) =>
+    setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -30,27 +33,41 @@ export function QuestionList({ questions }: { questions: Question[] }) {
   return (
     <>
       <label className="mb-3 flex w-fit cursor-pointer items-center gap-2 text-sm">
-        <input type="checkbox" checked={hideAnswers} onChange={(e) => setHideAnswers(e.target.checked)} />
+        <input
+          type="checkbox"
+          checked={hideAnswers}
+          onChange={(e) => {
+            setHideAnswers(e.target.checked);
+            setRevealed(new Set());
+          }}
+        />
         답변 가리기 <span className="text-muted">(스스로 답해 본 뒤 펼쳐 보세요)</span>
       </label>
-      <ul className="space-y-2">
-        {questions.map((q) => {
-          const expanded = open.has(q.id);
-          return (
-            <li key={q.id} className="card">
-              <div className="flex items-start gap-3 p-4">
-                <button onClick={() => toggle(q.id)} className="min-w-0 flex-1 text-left" aria-expanded={expanded}>
+      <div className="card overflow-hidden">
+        <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] gap-4 border-b border-border bg-surface-2 px-4 py-2 text-xs font-medium text-muted md:grid">
+          <div>질문</div>
+          <div>모범답안</div>
+          <div className="w-12" />
+        </div>
+        <ul className="divide-y divide-border">
+          {questions.map((q) => {
+            const hidden = hideAnswers && !revealed.has(q.id);
+            const isLong = q.modelAnswer.length > COLLAPSE_CHARS;
+            const isExpanded = expanded.has(q.id);
+            return (
+              <li key={q.id} className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] md:gap-4">
+                <div className="min-w-0">
                   <p className="font-medium">{q.question}</p>
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {q.category && <span className="chip">{q.category}</span>}
-                    {q.tags.map((t) => <span key={t} className="chip">#{t}</span>)}
-                  </div>
-                </button>
-                <Link href={`/questions/${q.id}`} className="btn btn-sm shrink-0">수정</Link>
-              </div>
-              {expanded && (
-                <div className="border-t border-border px-4 py-3">
-                  {hideAnswers && !revealed.has(q.id) ? (
+                  {(q.category || q.tags.length > 0) && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {q.category && <span className="chip">{q.category}</span>}
+                      {q.tags.map((t) => <span key={t} className="chip">#{t}</span>)}
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="mb-1 text-xs font-medium text-muted md:hidden">모범답안</p>
+                  {hidden ? (
                     <button
                       className="text-sm text-primary underline"
                       onClick={() => setRevealed((prev) => new Set(prev).add(q.id))}
@@ -58,16 +75,35 @@ export function QuestionList({ questions }: { questions: Question[] }) {
                       답변 보기
                     </button>
                   ) : q.modelAnswer ? (
-                    <Markdown>{q.modelAnswer}</Markdown>
+                    <>
+                      <div className={isLong && !isExpanded ? "relative max-h-40 overflow-hidden" : undefined}>
+                        <Markdown>{q.modelAnswer}</Markdown>
+                        {isLong && !isExpanded && (
+                          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-surface to-transparent" />
+                        )}
+                      </div>
+                      {isLong && (
+                        <button
+                          className="mt-1 text-xs text-primary underline"
+                          onClick={() => toggleExpanded(q.id)}
+                          aria-expanded={isExpanded}
+                        >
+                          {isExpanded ? "접기" : "더 보기"}
+                        </button>
+                      )}
+                    </>
                   ) : (
-                    <p className="text-sm text-muted">모범답변이 없습니다.</p>
+                    <p className="text-sm text-muted">모범답안이 없습니다.</p>
                   )}
                 </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+                <div className="md:w-12 md:text-right">
+                  <Link href={`/questions/${q.id}`} className="btn btn-sm">수정</Link>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </>
   );
 }

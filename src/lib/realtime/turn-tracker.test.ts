@@ -5,10 +5,16 @@ import { TurnTracker, type FinalTurn } from "./turn-tracker";
 function setup() {
   let clock = 0;
   const finals: FinalTurn[] = [];
-  const tracker = new TurnTracker(() => clock, { onFinal: (t) => finals.push(t), onChange: () => {} });
+  const state = { questionId: null as string | null };
+  const tracker = new TurnTracker(
+    () => clock,
+    { onFinal: (t) => finals.push(t), onChange: () => {} },
+    () => state.questionId,
+  );
   return {
     tracker,
     finals,
+    state,
     at(ms: number, event: Record<string, unknown>) {
       clock = ms;
       tracker.handle(event as { type: string });
@@ -25,7 +31,7 @@ test("면접관 턴은 오디오가 실제로 재생된 구간을 시각으로 �
   assert.equal(finals.length, 0, "오디오가 끝나기 전에는 확정하지 않는다");
   at(3000, { type: "output_audio_buffer.stopped", response_id: "r1" });
   assert.deepEqual(finals, [
-    { role: "interviewer", text: "안녕하세요", startMs: 400, endMs: 3000, itemId: "i1", interrupted: false },
+    { role: "interviewer", text: "안녕하세요", startMs: 400, endMs: 3000, itemId: "i1", interrupted: false, questionId: null },
   ]);
 });
 
@@ -42,6 +48,7 @@ test("지원자 전사가 늦게 도착해도 발화 시작 시각을 유지한�
     endMs: 9000,
     itemId: "u1",
     interrupted: false,
+    questionId: null,
   });
 });
 
@@ -105,4 +112,36 @@ test("응답 지연은 발화 끝 감지부터 면접관 오디오 시작까지 
   at(3800, { type: "output_audio_buffer.started", response_id: "r1" });
   at(5000, { type: "output_audio_buffer.started", response_id: "r2" });
   assert.deepEqual(tracker.latencies, [800]);
+});
+
+test("지원자 턴은 말을 시작한 시점의 질문을 유지한다", () => {
+  const { at, finals, state } = setup();
+  state.questionId = "q1";
+  at(1000, { type: "input_audio_buffer.speech_started", item_id: "u1" });
+  at(4000, { type: "input_audio_buffer.speech_stopped", item_id: "u1" });
+  state.questionId = "q2"; // 전사가 끝나기 전에 면접관이 다음 질문으로 넘어감
+  at(4500, { type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: "네" });
+  assert.equal(finals[0].questionId, "q1");
+});
+
+test("면접관 턴은 response.done 시점의 질문을 쓴다", () => {
+  const { at, finals, state } = setup();
+  state.questionId = "q1";
+  at(0, { type: "output_audio_buffer.started", response_id: "r1" });
+  at(100, { type: "response.output_audio_transcript.delta", response_id: "r1", item_id: "i1", delta: "다음 질문입니다" });
+  at(300, { type: "response.output_audio_transcript.done", response_id: "r1", item_id: "i1", transcript: "다음 질문입니다" });
+  state.questionId = "q2"; // 같은 응답의 start_question 호출을 세션이 먼저 처리했다고 가정
+  at(400, { type: "response.done", response: { id: "r1", status: "completed" } });
+  at(2000, { type: "output_audio_buffer.stopped", response_id: "r1" });
+  assert.equal(finals[0].questionId, "q2");
+});
+
+test("도구 호출만 있는 응답은 턴을 만들지 않는다", () => {
+  const { at, finals, tracker } = setup();
+  at(0, {
+    type: "response.done",
+    response: { id: "r1", status: "completed", output: [{ type: "function_call", name: "start_question", call_id: "c1" }] },
+  });
+  assert.equal(finals.length, 0);
+  assert.equal(tracker.liveTurns().length, 0);
 });

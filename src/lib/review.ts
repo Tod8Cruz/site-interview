@@ -9,6 +9,8 @@ export type ReviewTurn = {
   interrupted: boolean;
   note: string | null;
   noteQuestionId: string | null;
+  /** 면접 중 start_question 도구로 기록된 질문 (없으면 null) */
+  questionId: string | null;
 };
 
 export type ReviewQuestion = { id: string; question: string };
@@ -39,9 +41,12 @@ export function similarity(a: string, b: string) {
 
 const MIN_SIMILARITY = 0.15;
 
-/** L-14 기본값: 이 턴 직전(이 턴 포함) 면접관 발화와 가장 비슷한 예상 질문 */
+/**
+ * L-14 기본값: 면접 중 기록된 질문이 있으면 그것, 없으면 이 턴 직전(이 턴 포함) 면접관 발화와 가장 비슷한 예상 질문.
+ */
 export function suggestQuestion(turns: ReviewTurn[], index: number, questions: ReviewQuestion[]) {
   if (!questions.length) return null;
+  const known = new Set(questions.map((q) => q.id));
   let asked: ReviewTurn | undefined;
   for (let i = index; i >= 0; i--) {
     if (turns[i].role === "interviewer") {
@@ -49,6 +54,8 @@ export function suggestQuestion(turns: ReviewTurn[], index: number, questions: R
       break;
     }
   }
+  const recorded = turns[index].questionId ?? asked?.questionId ?? null;
+  if (recorded && known.has(recorded)) return recorded;
   if (!asked) return null;
   let best: { id: string; score: number } | null = null;
   for (const q of questions) {

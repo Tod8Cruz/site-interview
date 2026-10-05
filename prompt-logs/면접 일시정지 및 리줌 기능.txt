@@ -1,0 +1,204 @@
+# session: 81059ede-24ec-469e-836a-bd3f10b253f4
+
+[2026-10-06 06:33:05] <task-notification>
+<task-id>bi733kdne</task-id>
+<tool-use-id>toolu_01LC7uFQGtj5uL7Tbs9RTah1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tod-projects-site-interview/81059ede-24ec-469e-836a-bd3f10b253f4/tasks/bi733kdne.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait until the design agent's transcript stops changing" completed (exit code 0)</summary>
+</task-notification>
+
+[2026-10-06 06:33:12] <task-notification>
+<task-id>buxq80gqu</task-id>
+<tool-use-id>toolu_013RRXeQP4oa2AbDqtq5hzXD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tod-projects-site-interview/81059ede-24ec-469e-836a-bd3f10b253f4/tasks/buxq80gqu.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the design agent's transcript to be quiet for 90 seconds" completed (exit code 0)</summary>
+</task-notification>
+
+[2026-10-06 06:33:25] <task-notification>
+<task-id>big1nrwij</task-id>
+<tool-use-id>toolu_01DhX7GTnZGPVWcjxRuQrAkt</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tod-projects-site-interview/81059ede-24ec-469e-836a-bd3f10b253f4/tasks/big1nrwij.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait up to 8 minutes for the design agent to go fully quiet" completed (exit code 0)</summary>
+</task-notification>
+
+[2026-10-06 08:08:19] <task-notification>
+<task-id>adedef35ef56c7d2f</task-id>
+<tool-use-id>toolu_01SH4aBrBEKpW5FeDctGdbSh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tod-projects-site-interview/81059ede-24ec-469e-836a-bd3f10b253f4/tasks/adedef35ef56c7d2f.output</output-file>
+<status>completed</status>
+<summary>Agent "Design pause/resume plan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have verified the code paths. Everything in the context summary checks out, with a few details worth flagging because they shape the design:
+
+- `durationMs` is only written at end, and `pastLimit` (src/server/interviews.ts:37-38) uses `startedAt + maxMinutes`. Since the call route already resets `startedAt` on every connect, `startedAt` effectively means "when the current call segment began", which is exactly what a resume needs.
+- `finish()` (interview-session.ts:212-253) already does the right ordering for a pause: flush tracker, stop recorder, close transport, `await pendingPosts`, then PATCH, then upload. Pause can reuse it with a new reason.
+- `TurnTracker` takes `now()` by injection, so offsetting the clock in `InterviewSession.now()` is enough for monotonic `startMs`.
+- `QuestionTracker.apply` is already idempotent on the same index and rejects backward calls with `expected`, so seeding `current` gives resume the right guardrails for free.
+- IndexedDB stores are keyed by `interviewId` only (chunk-store.ts:26-27), so a second segment would clobber the first if it failed to upload.
+
+# Implementation plan: 일시정지 / 재개
+
+## 0. Key decisions (recommendations)
+
+| Topic | Decision | Why |
+|---|---|---|
+| Status | Add `"paused"` to `InterviewStatus` | Minimal; everything keys off status today |
+| API | Extend `PATCH /api/interviews/[id]` with `status: "paused"` (+ `durationMs`, `currentQuestionIndex`). No `/resume` endpoint: resume is `POST /api/realtime/call` accepting `paused`. | `finish()` already PATCHes; `patchInterview` already handles status transition + hangup. The call route is the only place a call is born, so it is the natural resume point. |
+| Accumulated time | Reuse `interviews.durationMs` as "accumulated active ms" (written at pause and at end). No new `active_ms` column. | List/review already display it (a paused row shows time so far), and server `pastLimit` can add it to the current segment. |
+| Question index | New column `current_question_index` (0-based, nullable) written at pause; fallback derived from turns' `questionId` when null (crash case). | Exact when paused cleanly, robust when not |
+| Recording | One blob per segment + new table `interview_recordings` keyed by `(interview_id, start_ms)`; replay picks segment by `turn.startMs`. Do not concatenate webm. | Concatenating Opus/webm needs remuxing (EBML cluster timecodes, cues) — fragile in-browser; `makeSeekable` only fixes metadata. Segment switching in a single `&lt;audio&gt;` is ~40 lines. |
+| Resume context | Client sends saved turns as `conversation.item.create` messages over the data channel, then a system item, then `response.create`. Server appends a short "재개 프로토콜" to `instructions` in the session config. | Full fidelity (model sees exact prior Q&amp;A); the protocol text in instructions carries more weight for "do not restart from question 1". Summary-in-instructions loses what was answered. |
+| Paused blocking new interview | Paused does **not** block `createInterview`. Resume (call route) is rejected with 409 if another interview is `in_progress`. | Paused costs nothing (no call). Blocking would force users to abort to practice something else. |
+| Auto-abort | `hangupOverdueCalls`/`abortStaleInterviews` keep filtering `status = in_progress`, so paused is naturally exempt. | Requirement |
+| Browser closed / disconnect | `end("disconnected")` → status `paused` (not aborted). `end("error")` stays aborted. Crash with no PATCH (status in_progress + callId) → the live page offers "이어서 진행" which PATCHes `paused` with server-estimated active time, then resumes. | Reconnect was out of scope only because time limits could be bypassed; with accumulated time tracked server-side that reason is gone. |
+
+## 1. Schema + migration (`drizzle/0004`)
+
+`/Users/tod/projects/site-interview/web/src/db/schema.ts`
+- `InterviewStatus = "in_progress" | "paused" | "completed" | "aborted"` (text column, no SQL change).
+- `interviews`: add `pausedAt: timestamp("paused_at", { withTimezone: true })`, `currentQuestionIndex: integer("current_question_index")`. Document `durationMs` as "accumulated active ms (at pause or end)" and `startedAt` as "start of the current/last call segment".
+- New table `interviewRecordings`:
+  `id uuid pk`, `interviewId uuid fk cascade`, `startMs integer not null` (recording-clock offset where the segment begins), `durationMs integer` (nullable; unknown for crashed segments), `url text not null`, `pathname text not null`, `bytes integer not null`, `mimeType text not null`, `createdAt`. `unique(interviewId, startMs)`, index on `(interviewId, startMs)`.
+- Keep `audioUrl/audioPathname/audioBytes` columns (do not drop in this change); keep `audioStatus` as the aggregate.
+
+Migration: run `npm run db:generate` to produce `drizzle/0004_*.sql` + snapshot, then hand-append one backfill statement after a `--&gt; statement-breakpoint`:
+`INSERT INTO interview_recordings (interview_id, start_ms, duration_ms, url, pathname, bytes, mime_type) SELECT id, 0, duration_ms, audio_url, coalesce(audio_pathname, ''), coalesce(audio_bytes, 0), 'audio/webm' FROM interviews WHERE audio_url IS NOT NULL;`
+After this, the review page reads only from `interview_recordings`; `uploadRecording` stops writing `audioUrl`.
+
+## 2. Server
+
+`/Users/tod/projects/site-interview/web/src/lib/validation.ts`
+- `interviewPatchSchema.status: z.enum(["paused","completed","aborted"])`, add `currentQuestionIndex: z.number().int().min(0).nullable()`.
+- New `recordingSchema = { startMs int&gt;=0, durationMs int&gt;=0 nullish, url, pathname, bytes, mimeType }`.
+
+`/Users/tod/projects/site-interview/web/src/server/interviews.ts`
+- `pastLimit(grace)`: subtract accumulated time:
+  `startedAt + make_interval(mins =&gt; maxMinutes + grace) - make_interval(secs =&gt; coalesce(durationMs,0)/1000.0) &lt; now()`. Both cleanup functions keep `eq(status,"in_progress")`.
+- `patchInterview`: when `data.status` present, load current row and validate transition (`paused` only from `in_progress`; `completed|aborted` from `in_progress|paused`; else `ConflictError`). For `paused`: set `pausedAt = now`, `realtimeCallId = null`, `durationMs = data.durationMs ?? estimateActiveMs(current, turns)`, `currentQuestionIndex`. For completed/aborted: existing `endedAt` logic. Hang up `current.realtimeCallId` if set (today it only does so when `in_progress`; keep that).
+- `createInterview`: unchanged conflict check (`in_progress` only).
+- `listInterviews`: add `currentQuestionIndex` to selection (list can show "질문 k/N").
+- New `listRecordings(id)`, `saveRecording(id, input)` (upsert on `(interviewId,startMs)`; set `audioStatus = "uploaded"`), and extend `deleteInterview` to `del()` every recording url plus legacy `audioUrl`.
+- New pure helpers in `/Users/tod/projects/site-interview/web/src/lib/interview-time.ts` (no `server-only`, testable): `estimateActiveMs({ durationMs, turns })` = `max(durationMs ?? 0, max(turn.endMs ?? turn.startMs))`; `resumeQuestionIndex(column, turns, questionIds)` = `column ?? max(questionIds.indexOf(t.questionId))` or null.
+
+`/Users/tod/projects/site-interview/web/src/app/api/interviews/[id]/recordings/route.ts` (new): `POST` → `saveRecording`; `GET` → list (used by replay's local fallback decision if needed).
+
+`/Users/tod/projects/site-interview/web/src/app/api/realtime/call/route.ts`
+- Accept `status in ("in_progress","paused")`; otherwise 409 `conflict`.
+- Keep the existing `in_progress &amp;&amp; realtimeCallId` → hangup + 409 `already_started` guard.
+- If `paused`: query for any other `in_progress` row → 409 `conflict` with `{ interviewId }` (same shape `start-interview.tsx` already handles).
+- Build session with `buildRealtimeSession(interview, { resume: interview.status === "paused" ? { questionIndex } : null })`.
+- After OpenAI answers, do a conditional update: `set { realtimeCallId, startedAt: now, status: "in_progress", pausedAt: null } where id = ? and realtimeCallId is null` (`.returning()`); if 0 rows (two tabs raced), `hangupCall(newCallId)` and return 409.
+
+`/Users/tod/projects/site-interview/web/src/server/realtime.ts`
+- `buildRealtimeSession(interview, opts)`: when resuming and `questionCount &gt; 0`, `instructions = interview.instructions + resumeProtocol(questionIndex, questionCount)`.
+
+`/Users/tod/projects/site-interview/web/src/lib/realtime/question-protocol.ts`
+- `QuestionTracker` constructor gains `initialIndex: number | null` (sets `current`). Existing backward-rejection then yields `expected = current + 2`.
+- New `resumeProtocol(currentIndex: number | null, count)`: "[재개 프로토콜] 이 면접은 일시정지 후 재개된 것입니다. 대화 기록은 conversation에 있습니다. 질문 목록 k번까지 시작했습니다. 인사·자기소개를 반복하지 말고, '면접을 이어서 진행하겠습니다'라고 짧게 말한 뒤 k번 답변이 끝나지 않았으면 이어서 듣고, 끝났으면 k+1번부터 start_question을 호출해 계속하세요. 1번부터 다시 시작하지 마세요."
+
+## 3. Resume context (client, pure)
+
+New `/Users/tod/projects/site-interview/web/src/lib/realtime/resume-context.ts`:
+- `buildResumeItems(turns: {role,text,interrupted}[], opts: { pausedForMs, questionIndex, questionCount, maxChars? })` → array of Realtime client events:
+  - candidate turn → `{ type:"conversation.item.create", item:{ type:"message", role:"user", content:[{ type:"input_text", text }] } }`
+  - interviewer turn → `role:"assistant", content:[{ type:"output_text", text }]` (GA Realtime naming; the beta used `"text"` — confirm against the current API reference when implementing; `interview-session.ts:333` already uses `input_text` for a system message, so the user/system side is verified).
+  - Skip empty text; if total chars exceed `maxChars` (~24k), drop oldest turns and prepend a system item "(앞부분 대화 생략)".
+  - Final system item: paused duration in minutes, "마지막 면접관 발언이 끊겼으므로 요약해 다시 말해 주세요" when the last interviewer turn has `interrupted`, "지원자가 답변 도중 멈췄다면 이어서 답하게 하세요" when the last turn is a candidate turn.
+- The session sends these in `channel.onopen` before `response.create`. SCTP ordering guarantees the items land before the response request; no need to wait for `conversation.item.created` acks.
+
+## 4. Client session (`/Users/tod/projects/site-interview/web/src/lib/realtime/interview-session.ts`)
+
+- Constructor gets `resume: { activeMs, questionIndex, items } | null`. `offsetMs = resume?.activeMs ?? 0`; `QuestionTracker(questions, resume?.questionIndex ?? null)`; initial `state.currentQuestionIndex` and `elapsedMs` from resume.
+- `now()` → `offsetMs + round((context.currentTime - t0)*1000)`. `tick()`/wrap-up/limit math need no change because `elapsedMs` is already total.
+- `start()`: `new MixedRecorder(context, interviewId, { startMs: offsetMs })`; in `onopen`, if resume: send items, then `response.create`.
+- `EndReason` adds `"pause"`; `EndResult.status` adds `"paused"`. Status mapping in `finish()`: `user|timeout → completed`, `pause|disconnected → paused`, `error → aborted`.
+- `finish()`: segment `durationMs = now() - offsetMs`; PATCH body for pause: `{ status:"paused", durationMs: this.now(), currentQuestionIndex: this.questions.current, audioStatus }`. Upload via `uploadSegment(interviewId, { startMs: offsetMs, durationMs: segmentDuration, blob })`. Keep the existing order (pendingPosts → PATCH → upload) so turns are in the DB before status flips.
+- Guard: ignore `pause` when `wrapUpSent` (UI also disables the button).
+
+## 5. Recorder / storage
+
+`/Users/tod/projects/site-interview/web/src/lib/recorder/chunk-store.ts`
+- `DB_VERSION = 2`; chunks keyPath `["interviewId","startMs","seq"]`, meta keyPath `["interviewId","startMs"]`. In `onupgradeneeded` when `oldVersion &lt; 2`: read old records within the versionchange transaction, delete old stores, recreate, re-put with `startMs: 0`.
+- `RecordingMeta` adds `startMs` (segment offset). `loadRecordings(interviewId)` returns `{ startMs, blob, meta }[]` sorted; `deleteRecording(interviewId, startMs)`; `listStoredRecordings()` unchanged shape plus `startMs`.
+
+`/Users/tod/projects/site-interview/web/src/lib/recorder/mixed-recorder.ts`: constructor takes `{ startMs }`, passes it to `putMeta`/`putChunk`.
+
+`/Users/tod/projects/site-interview/web/src/lib/recorder/upload.ts`
+- `uploadSegment(interviewId, { startMs, durationMs, blob? })`: blob path `interviews/{id}/{startMs}.{ext}` (upload route only checks the `interviews/` prefix, so no change there), then `POST /api/interviews/[id]/recordings`, then delete the local segment.
+- `uploadPendingSegments(interviewId)`: loads all local segments and uploads each; returns aggregate `UploadResult`. Used by retry buttons and recovery. Remove the `audioUrl` PATCH.
+- `downloadLocalRecording`: download each segment (suffix `-{startMs}`).
+
+New `/Users/tod/projects/site-interview/web/src/lib/recorder/segments.ts` (pure): `type Segment = { url, startMs, durationMs|null }`; `segmentAt(segments, ms)` (last segment with `startMs &lt;= ms`), `toLocalMs`, `toGlobalMs`, `totalDurationMs(segments, fallbackLastDuration)`.
+
+`/Users/tod/projects/site-interview/web/src/components/recording-recovery.tsx`: skip only `status === "in_progress"`; `paused` segments get uploaded. Keep the live-path skip.
+
+## 6. UI
+
+`/Users/tod/projects/site-interview/web/src/app/(app)/interviews/[id]/live/page.tsx`
+- Allow `in_progress | paused`. Load turns; pass `resume` = `{ activeMs: durationMs ?? 0, questionIndex: resumeQuestionIndex(...), turns: [{role,text,interrupted}], pausedAt }` when paused, plus `status` and `alreadyStarted`.
+
+`/Users/tod/projects/site-interview/web/src/app/(app)/interviews/[id]/live/live-interview.tsx`
+- Idle card for paused: "이어서 진행하기 — 경과 m:ss, 질문 k/N 진행, 남은 n분"; button creates `InterviewSession` with `resume` (items built via `buildResumeItems` client-side).
+- Add "일시정지" button (enabled when `phase === "live" &amp;&amp; !wrapUpSent`), `confirm` → `end("pause")`. On `onEnded` with `reason === "pause"` → `router.push(/interviews/${id})`.
+- `alreadyStarted &amp;&amp; idle` notice becomes: "이전 연결이 끊겼습니다" with [이어서 진행] (PATCH `{status:"paused"}` → server estimates time → `router.refresh()`), and the existing [중단 처리하고 다시 보기].
+- Result notice: for `disconnected`, text now says "일시정지 상태로 저장되었습니다. 다시 보기에서 이어서 진행할 수 있습니다."
+
+`/Users/tod/projects/site-interview/web/src/app/(app)/interviews/[id]/page.tsx` + `replay.tsx`
+- Page passes `segments` (from `listRecordings`) and shows [이어서 진행] for `paused` (link to `/live`); the existing "면접 화면으로" stays for `in_progress`.
+- `Replay`: props `segments: Segment[]` instead of `audioUrl`; state `segmentIndex`; `seek(ms)` picks segment, swaps `src` if needed, sets `currentTime` after `loadedmetadata`, plays; `onEnded` advances to the next segment; `currentMs = seg.startMs + audio.currentTime`; scrubber spans `totalDurationMs`. Local fallback builds segments from `loadRecordings`. Legacy single segment (`startMs 0`) is the same path.
+
+`/Users/tod/projects/site-interview/web/src/app/(app)/interviews/page.tsx` and `/Users/tod/projects/site-interview/web/src/lib/format.ts`: `STATUS_LABEL.paused = "일시정지"`, `statusTone.paused`, link `paused` rows to `/live`, show "질문 k/N" for paused rows.
+
+`/Users/tod/projects/site-interview/web/src/app/(app)/interviews/start-interview.tsx`: no change needed (409 shape unchanged; paused does not conflict).
+
+## 7. Edge cases
+
+- Pause while interviewer is speaking: `flush()` marks the turn `interrupted` with the full transcript (deltas arrive ahead of audio). Resume system item asks the model to restate its last question. Replay shows "끊김".
+- Pause while candidate is speaking: `flush()` emits partial text (or nothing if no deltas yet). Resume item tells the model the candidate may have been cut off.
+- Pause while a turn POST is pending: already awaited before PATCH in `finish()`; keep that order.
+- Pause then `start_question` tool call only (no message) in the last response: tracker index is persisted via `currentQuestionIndex`, so resume seeds correctly even without a turn carrying that `questionId`.
+- OpenAI per-call cap: each resume is a new call, so the cap applies per segment; `maxMinutes &lt;= 60` validation stays.
+- Two tabs resuming: conditional update in the call route; loser hangs up its own call.
+- Pause PATCH never reaches the server (tab killed): row stays `in_progress` with `callId`; `hangupOverdueCalls` still protects cost; the live page offers "이어서 진행" via the estimate path. Local segment uploads via recovery once status is `paused`.
+- `end("pause")` after `wrapUpSent`: refused in session + disabled in UI (within the last minute, just finish).
+- Zero-length segment (pause immediately after resume): upsert on `(interviewId,startMs)` tolerates it; skip upload when blob is empty.
+- `startedAt` resets on each resume (existing behavior); list ordering moves a resumed interview to the top — acceptable, note it in the schema comment.
+
+## 8. Tests (`node --test`, `src/**/*.test.ts`)
+
+- `src/lib/realtime/question-protocol.test.ts`: seeded `QuestionTracker(questions, 1)` rejects index 1 with `expected 3`, accepts 2 (idempotent) and 3; `resumeProtocol(1, 3)` mentions 2번/3번; `resumeProtocol(null, 3)` says start from 1.
+- `src/lib/realtime/resume-context.test.ts`: roles/content types, order, empty-text skipped, truncation drops oldest and prepends the omission note, trailing system item mentions interrupted/cut-off cases and paused minutes.
+- `src/lib/recorder/segments.test.ts`: `segmentAt` boundaries, legacy single segment, `toLocalMs`/`toGlobalMs` round trip, `totalDurationMs` with null last duration.
+- `src/lib/interview-time.test.ts`: `estimateActiveMs` (null durationMs, turns with null endMs, max wins), `resumeQuestionIndex` (column wins, derived from turns, unknown questionId ignored, empty → null).
+- Optional: `turn-tracker.test.ts` add a case with an offset `now()` to pin that emitted `startMs/endMs` are absolute.
+
+## 9. Sequencing
+
+1. Schema + migration + validation (sections 1, 2 validation).
+2. Pure helpers + tests (interview-time, segments, resume-context, question-protocol seeding/protocol).
+3. Server: `patchInterview` transitions, `pastLimit`, recordings route, call route resume, `buildRealtimeSession`.
+4. Recorder/chunk-store/upload segment support + recovery.
+5. Session `pause`/resume/offset.
+6. UI: live page/component, list, review/replay.
+
+## 10. Verification
+
+- `npm test`, `npm run typecheck`, `npm run lint`; `npm run db:migrate` on a local DB and confirm the backfill row count equals interviews with `audio_url`.
+- Manual (desktop Chrome): start → answer Q1 → press 일시정지 mid-Q2 → review page shows "일시정지 · 질문 2/N", segment 1 plays and seeks per turn → 이어서 진행 → interviewer says "이어서 진행" and continues Q2/Q3 (watch `response.done` for a rejected `start_question(1)` retry) → elapsed timer starts from the accumulated value → finish → replay: clicking a turn after the pause point switches to segment 2 and seeks correctly; scrubber spans the total.
+- Pause during interviewer speech and during candidate speech; confirm turn rows and resume behavior.
+- Kill the tab mid-interview → list shows 진행중 → open live → "이어서 진행" → status paused with estimated time → resume works; recovery uploads the orphaned segment when visiting another page.
+- Cron: with a paused row, `GET /api/cron/realtime-guard` leaves it alone; with a resumed row whose `durationMs + (now-startedAt)` exceeds `maxMinutes + 2`, the call is hung up.
+- Start a new interview while one is paused → allowed; resume the paused one while another is `in_progress` → 409 with the running id.
+
+### Critical Files for Implementation
+- /Users/tod/projects/site-interview/web/src/lib/realtime/interview-session.ts
+- /Users/tod/projects/site-interview/web/src/server/interviews.ts
+- /Users/tod/projects/site-interview/web/src/app/api/realtime/call/route.ts
+- /Users/tod/projects/site-interview/web/src/db/schema.ts
+- /Users/tod/projects/site-interview/web/src/app/(app)/interviews/[id]/replay.tsx</result>
+<usage><subagent_tokens>123166</subagent_tokens><tool_uses>31</tool_uses><duration_ms>335283</duration_ms></usage>
+</task-notification>
+

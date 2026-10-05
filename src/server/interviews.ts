@@ -4,6 +4,7 @@ import { and, asc, desc, eq, isNotNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { interviews, interviewTurns, type Interview } from "@/db/schema";
 import { renderPrompt } from "@/lib/prompt-template";
+import { questionProtocol } from "@/lib/realtime/question-protocol";
 import {
   interviewCreateSchema,
   interviewPatchSchema,
@@ -135,11 +136,9 @@ export async function createInterview(input: InterviewCreateInput) {
 
   const selected = await getQuestionsByIds(data.questionIds);
   const maxMinutes = data.maxMinutes ?? prompt.maxMinutes;
-  const instructions = renderPrompt(prompt.content, {
-    questions: selected,
-    context,
-    maxMinutes,
-  });
+  // 질문 진행 프로토콜은 사용자가 고치는 프롬프트와 별개로 항상 붙인다(스냅샷에도 남도록 생성 시점에).
+  const instructions =
+    renderPrompt(prompt.content, { questions: selected, context, maxMinutes }) + questionProtocol(selected.length);
 
   const now = new Date();
   const [row] = await db
@@ -212,7 +211,13 @@ export async function getNotedQuestionIds(interviewId: string) {
 
 export async function saveTurn(interviewId: string, input: TurnInput) {
   const data = turnSchema.parse(input);
-  const values = { ...data, interviewId, endMs: data.endMs ?? null, itemId: data.itemId ?? null };
+  const values = {
+    ...data,
+    interviewId,
+    endMs: data.endMs ?? null,
+    itemId: data.itemId ?? null,
+    questionId: data.questionId ?? null,
+  };
   const query = db.insert(interviewTurns).values(values);
   // 같은 item_id는 한 번만 저장하되, 늦게 도착한 전사·끝 시각은 반영한다.
   const [row] = data.itemId
@@ -224,6 +229,7 @@ export async function saveTurn(interviewId: string, input: TurnInput) {
             startMs: values.startMs,
             endMs: values.endMs,
             interrupted: values.interrupted,
+            questionId: values.questionId,
           },
         })
         .returning()

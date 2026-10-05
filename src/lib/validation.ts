@@ -97,15 +97,25 @@ export type InterviewCreateInput = z.input<typeof interviewCreateSchema>;
 export const interviewPatchSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
-    status: z.enum(["completed", "aborted"]),
+    status: z.enum(["paused", "completed", "aborted"]),
+    /** 누적 진행 시간 */
     durationMs: z.number().int().min(0),
-    realtimeCallId: z.string().max(200),
+    currentQuestionIndex: z.number().int().min(0).nullable(),
     audioStatus: z.enum(["none", "pending", "uploaded", "failed"]),
-    audioUrl: z.url(),
-    audioPathname: z.string().max(500),
-    audioBytes: z.number().int().min(0),
   })
   .partial();
+
+export const recordingSchema = z.object({
+  seq: z.number().int().min(0),
+  startMs: z.number().int().min(0),
+  durationMs: z.number().int().min(0),
+  mimeType: z.string().max(100),
+  url: z.url(),
+  pathname: z.string().max(500),
+  bytes: z.number().int().min(0),
+});
+
+export type RecordingInput = z.input<typeof recordingSchema>;
 
 export const turnSchema = z.object({
   role: z.enum(["interviewer", "candidate"]),
@@ -114,6 +124,7 @@ export const turnSchema = z.object({
   endMs: z.number().int().min(0).nullish(),
   itemId: z.string().max(200).nullish(),
   interrupted: z.boolean().default(false),
+  questionId: z.uuid().nullish(),
 });
 
 export type TurnInput = z.input<typeof turnSchema>;
