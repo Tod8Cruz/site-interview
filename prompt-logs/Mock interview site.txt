@@ -1,0 +1,167 @@
+# session: 82ee9128-c819-4e36-b0f2-cc2a9a27ed74
+
+[2026-10-05 19:57:45] <task-notification>
+<task-id>a5b1eb5abf24e942d</task-id>
+<tool-use-id>toolu_01XsJvVepjUsb8TUaKuJbreT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tod-projects-site-interview/82ee9128-c819-4e36-b0f2-cc2a9a27ed74/tasks/a5b1eb5abf24e942d.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify OpenAI Realtime API details" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I verified all eight points against current official sources. The docs have moved to **developers.openai.com/api/docs/...** (adding `.md` to a page URL returns its markdown), and the openai-node SDK types on `master` match them. Anything I could not confirm is marked **UNVERIFIED**.
+
+Three things to know first:
+- **Recommended model** is now `gpt-realtime-2.1`, not `gpt-realtime`.
+- **New "GPT-Live" API:** the top of the WebRTC guide now describes a separate API (`POST /v1/live/sessions`, model `gpt-live-1`) with different events (`session.started` / `session.close` / `session.closed`). Everything below is the classic Realtime API (`/v1/realtime/...`). Don't mix the two.
+- **Ending a session:** there is no `session.close` client event for a normal Realtime conversation session. In the SDK it exists only for translation sessions (`RealtimeTranslationSessionCloseEvent`).
+
+**Source key** (cited by letter below):
+- **[N1]** https://github.com/openai/openai-node/blob/master/src/resources/realtime/client-secrets.ts
+- **[N2]** https://github.com/openai/openai-node/blob/master/src/resources/realtime/realtime.ts
+- **[N3]** https://github.com/openai/openai-node/blob/master/src/resources/realtime/calls.ts
+- **[G-WebRTC]** https://developers.openai.com/api/docs/guides/realtime-webrtc
+- **[G-Sideband]** https://developers.openai.com/api/docs/guides/voice-server-controls?api=realtime
+- **[G-Conv]** https://developers.openai.com/api/docs/guides/realtime-conversations
+- **[G-VAD]** https://developers.openai.com/api/docs/guides/realtime-vad
+- **[G-Transcr]** https://developers.openai.com/api/docs/guides/realtime-transcription
+- **[G-STT]** https://developers.openai.com/api/docs/guides/speech-to-text
+- **[R-Hangup]** https://developers.openai.com/api/reference/resources/realtime/subresources/calls/methods/hangup
+- **[R-Calls]** https://developers.openai.com/api/reference/resources/realtime/subresources/calls/methods/create
+- **[M]** https://developers.openai.com/api/docs/models/gpt-realtime-2.1
+
+---
+
+## 1. Ephemeral token (server side)
+
+`POST https://api.openai.com/v1/realtime/client_secrets`. Headers: `Authorization: Bearer &lt;OPENAI_API_KEY&gt;`, `Content-Type: application/json`, and optionally `OpenAI-Safety-Identifier: &lt;hashed user id&gt;`, which gets bound to the token. Sources: [G-WebRTC], [N1].
+
+```jsonc
+{
+  "expires_after": { "anchor": "created_at", "seconds": 600 },   // 10–7200, default 600
+  "session": {
+    "type": "realtime",                       // required
+    "model": "gpt-realtime-2.1",
+    "instructions": "...",
+    "output_modalities": ["audio"],           // ["audio"] or ["text"], not both
+    "audio": {
+      "input": {
+        "noise_reduction": { "type": "near_field" | "far_field" } | null,
+        "transcription": {
+          "model": "gpt-4o-transcribe",
+          "language": "en",                   // ISO-639-1
+          "prompt": "..."
+          // also: "keywords": [..], "languages": [..], "delay": "minimal|low|medium|high|xhigh"
+        },
+        "turn_detection":
+          { "type": "semantic_vad", "eagerness": "low"|"medium"|"high"|"auto",
+            "create_response": true, "interrupt_response": true }
+          // or
+          { "type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300,
+            "silence_duration_ms": 500, "idle_timeout_ms": null,
+            "create_response": true, "interrupt_response": true }
+          // or null (manual turns)
+      },
+      "output": { "voice": "marin", "speed": 1.0 }
+    }
+  }
+}
+```
+
+- **Defaults** [N1]: `threshold` 0.5, `prefix_padding_ms` 300 ms, `silence_duration_ms` 500 ms. `eagerness: "auto"` behaves like `medium`.
+- **Eagerness timeouts** [N1]: `low` / `medium` / `high` wait at most 8 s / 4 s / 2 s.
+- **`idle_timeout_ms`** works only with `server_vad`, and emits `input_audio_buffer.timeout_triggered`.
+
+**Response** [N1]:
+```ts
+{ value: string /* "ek_..." */, expires_at: number /* epoch s */, session: RealtimeSessionCreateResponse }
+```
+The token string is `data.value`; the guide's browser code does `const EPHEMERAL_KEY = data.value` [G-WebRTC].
+
+## 2. SDP exchange from the browser
+
+`POST https://api.openai.com/v1/realtime/calls` with headers `Authorization: Bearer &lt;EPHEMERAL_KEY&gt;` and `Content-Type: application/sdp`. The body is the raw `offer.sdp`, and the response body is the SDP answer as text (`await r.text()`). Sources: [G-WebRTC], [R-Calls].
+
+- **Model query string:** not required. The guide's ephemeral-token flow uses the bare URL, and the model comes from the session attached to the token. Whether a `?model=` override still works is UNVERIFIED.
+- **Unified alternative (no token in the browser):** your server posts multipart form data to the same URL using the normal API key, with fields `sdp` and `session` (the session JSON) [G-WebRTC], [N3].
+- **Call ID:** comes back in the `Location` header, e.g. `Location: /v1/realtime/calls/rtc_123456`. Read it with `sdpResponse.headers.get("Location")?.split("/").pop()` [G-Sideband]. IDs look like `rtc_u1_9c65...`. The same ID lets your server attach a sideband WebSocket at `wss://api.openai.com/v1/realtime?call_id=&lt;id&gt;`.
+  - **UNVERIFIED:** whether the browser can actually read `Location` cross-origin. That depends on OpenAI sending `Access-Control-Expose-Headers: Location`. If it comes back null in the browser, use the unified flow, where your server reads the header.
+
+## 3. Data channel
+
+`pc.createDataChannel("oai-events")` [G-WebRTC].
+
+## 4. Server events (types from [N2])
+
+| Event | Key fields |
+|---|---|
+| `input_audio_buffer.speech_started` | `event_id, item_id, audio_start_ms` |
+| `input_audio_buffer.speech_stopped` | `event_id, item_id, audio_end_ms` |
+| `input_audio_buffer.timeout_triggered` | `item_id, audio_start_ms, audio_end_ms` |
+| `conversation.item.input_audio_transcription.delta` | `item_id, content_index?, delta?, logprobs?` |
+| `conversation.item.input_audio_transcription.completed` | `item_id, content_index, transcript, usage, languages?, logprobs?` |
+| `conversation.item.input_audio_transcription.failed` | `item_id, content_index, error{type?,code?,message?,param?}` |
+| `response.output_audio_transcript.delta` | `response_id, item_id, output_index, content_index, delta` |
+| `response.output_audio_transcript.done` | `response_id, item_id, output_index, content_index, transcript` |
+| `output_audio_buffer.started` (WebRTC/SIP only) | `event_id, response_id` |
+| `output_audio_buffer.stopped` (WebRTC/SIP only) | `event_id, response_id` |
+| `output_audio_buffer.cleared` (WebRTC/SIP only) | `event_id, response_id` |
+| `response.created` / `response.done` | `response: { id, status, status_details, output[], usage, conversation_id, metadata }` |
+| `conversation.item.added` / `conversation.item.done` | `item, previous_item_id?: string\|null` |
+| `error` | `error: { type, message, code?, param?, event_id? }` |
+
+- **`response.status` values:** `completed | cancelled | failed | incomplete | in_progress`.
+- **`status_details`:** `type` is `completed|cancelled|incomplete|failed`; `reason` is `turn_detected | client_cancelled | max_output_tokens | content_filter`.
+- **Barge-in** therefore arrives as `response.done` with `status: "cancelled"` and reason `turn_detected`. The guide's mention of a `response.cancelled` event [G-Conv] has no matching type in the SDK. Rely on `response.done`.
+- **When the WebRTC buffer events fire** [N2]: `started` comes after `response.content_part.added`, `stopped` after `response.done` once audio has fully drained, and `cleared` on a VAD interruption or after the client sends `output_audio_buffer.clear`.
+- **Transcript ordering:** completion events from different turns can arrive out of order, so match them by `item_id` [G-Transcr].
+- **`conversation.item.created`** still exists in the SDK alongside `added` / `done`.
+
+## 5. Client events (types from [N2]; example in [G-WebRTC])
+
+- **`response.create`:** `{ type, event_id?, response?: { instructions?, output_modalities?, conversation?: "auto"|"none", input?: ConversationItem[], metadata?, tools?, tool_choice?, max_output_tokens?, audio?, reasoning? } }`. `instructions` here applies to that one response only.
+- **`session.update`:** `{ type: "session.update", session: { type: "realtime", ...same fields as section 1 } }`. `session.type` is required. Voice cannot change after the model has spoken once, and sessions last at most 60 minutes [G-Conv].
+- **`conversation.item.create`:** `{ type, previous_item_id?, item: { type: "message", role: "system"|"user", content: [{ type: "input_text", text }] } }`. User messages can also use `input_audio` and `input_image`.
+- **Stopping playback:** `response.cancel { response_id? }`, then `output_audio_buffer.clear`.
+
+## 6. Hanging up from the server
+
+**Yes.** `POST https://api.openai.com/v1/realtime/calls/{call_id}/hangup` with `Authorization: Bearer &lt;API key&gt;` and no body. The reference says it ends "an active Realtime API call, whether it was initiated over SIP or WebRTC" [R-Hangup]. SDK: `client.realtime.calls.hangup(callId)` [N3]. `accept`, `reject` and `refer` are SIP-only. The docs are clear it applies to WebRTC; I did not test it live.
+
+## 7. Models and voices
+
+- **Voices** [N1], [N2]: `alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar`. OpenAI recommends `marin` and `cedar` for best quality.
+- **Recommended model:** `gpt-realtime-2.1`, used in every current guide example. Per its model page, it updates `gpt-realtime-2` (a reasoning model) with better alphanumeric recognition, silence/noise handling and interruption behaviour [M].
+- **Other models in the SDK enum:** `gpt-realtime-2.1-mini`, `gpt-realtime-2`, `gpt-realtime-1.5`, `gpt-realtime`, `gpt-realtime-mini`, and dated snapshots.
+- **Transcription models** in the enum [N2]: `whisper-1`, `gpt-transcribe`, `gpt-live-transcribe`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `gpt-4o-mini-transcribe-2025-12-15`, `gpt-4o-transcribe-diarize`, `gpt-realtime-whisper`.
+  - `gpt-live-transcribe` is the docs' recommended streaming transcriber for *transcription-only* sessions. It uses `languages` (an array) instead of `language` [G-Transcr].
+  - **UNVERIFIED:** whether `gpt-live-transcribe` is supported as `audio.input.transcription.model` inside a `type: "realtime"` speech-to-speech session. `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` are the safe choices there.
+  - `gpt-transcribe` inside a Realtime session needs a WebSocket [G-Transcr].
+
+## 8. Keeping "um/uh" via the transcription prompt
+
+**Partly verified.** The speech-to-text guide lists "Preserving punctuation, capitalization, and filler words" as a prompting use case [G-STT]. `prompt` is free text for the gpt-4o-transcribe family and a keyword list for `whisper-1` [N2]. It is not supported by `gpt-4o-transcribe-diarize` or `gpt-realtime-whisper` [N2], [G-STT].
+- Nothing official confirms the realtime input-transcription path keeps fillers reliably. Treat it as a hint and test it, e.g. a prompt like "Transcribe verbatim, including filler words such as um, uh, like."
+
+**Minor contradiction in the SDK** [N2]: the field comment says `delay` works only with `gpt-realtime-whisper` in Realtime sessions, but the transcription guide uses `delay` with `gpt-live-transcribe`.
+
+I wrote no files. Two side notes: the Google Drive and Notion connectors need authorizing in your claude.ai connector settings, and the Zoom MCP servers failed to connect (invalid token). None of them were needed for this research.</result>
+<usage><subagent_tokens>90824</subagent_tokens><tool_uses>23</tool_uses><duration_ms>143227</duration_ms></usage>
+</task-notification>
+
+[2026-10-05 20:24:55] restart server with openai API key
+
+[2026-10-05 20:30:41] /goal M6까지 진행
+
+[2026-10-06 05:14:53] deleted it.
+
+[2026-10-06 05:15:43] <task-notification>
+<task-id>b9e0obv9w</task-id>
+<tool-use-id>toolu_018C7wo4MzZyqkmTn7PZrwch</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tod-projects-site-interview/82ee9128-c819-4e36-b0f2-cc2a9a27ed74/tasks/b9e0obv9w.output</output-file>
+<status>completed</status>
+<summary>Background command "Start Next.js dev server on port 3123" completed (exit code 0)</summary>
+</task-notification>
+
+[2026-10-06 05:17:07] 모의면접에서 지원자 정보는 설정에서 선택하도록 하고, 면접 시작 누르면 모달로 옵션 선택하도록
+
+[2026-10-06 05:33:24] 면접 프롬프트에서 카드 전체 클릭 영역으로
+

@@ -1,0 +1,328 @@
+import { openMicrophone, routeToSpeaker, type AudioDevicePrefs } from "@/lib/audio-devices";
+import { MixedRecorder } from "@/lib/recorder/mixed-recorder";
+import { uploadRecording, type UploadResult } from "@/lib/recorder/upload";
+import { TurnTracker, type FinalTurn, type LiveTurn, type ServerEvent } from "./turn-tracker";
+
+export type EndReason = "user" | "timeout" | "disconnected" | "error";
+export type SessionPhase = "idle" | "connecting" | "live" | "ending" | "ended";
+
+export type SessionSnapshot = {
+  phase: SessionPhase;
+  elapsedMs: number;
+  turns: LiveTurn[];
+  candidateSpeaking: boolean;
+  interviewerSpeaking: boolean;
+  muted: boolean;
+  wrapUpSent: boolean;
+  error: string | null;
+};
+
+export type SessionMetrics = {
+  /** 응답 지연 (ms) */
+  latencyP50: number | null;
+  latencyP95: number | null;
+  latencySamples: number;
+  /** response.done / 전사 완료 이벤트의 usage 합계 (비용 실측용) */
+  usage: Record<string, number>;
+};
+
+export type EndResult = {
+  reason: EndReason;
+  status: "completed" | "aborted";
+  durationMs: number;
+  upload: UploadResult;
+  metrics: SessionMetrics;
+};
+
+const WRAP_UP_INSTRUCTION =
+  "[진행 안내] 남은 시간이 약 1분입니다. 방금 답변에 짧게 반응한 뒤 \"마지막으로 하고 싶은 말이 있나요?\"라고 묻고, 답을 들은 뒤 \"면접을 마치겠습니다\"라고 말하며 마무리하세요.";
+
+const DISCONNECT_GRACE_MS = 5000;
+
+function percentile(values: number[], p: number) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)];
+}
+
+/** usage 객체의 숫자 필드를 평탄화해 누적한다 (예: input_token_details.audio_tokens). */
+function addUsage(total: Record<string, number>, usage: unknown, prefix = "") {
+  if (!usage || typeof usage !== "object") return;
+  for (const [key, value] of Object.entries(usage)) {
+    const name = prefix ? `${prefix}.${key}` : key;
+    if (typeof value === "number") total[name] = (total[name] ?? 0) + value;
+    else addUsage(total, value, name);
+  }
+}
+
+/**
+ * 모의 면접 한 번의 실시간 세션.
+ * - WebRTC로 OpenAI Realtime에 연결 (SDP는 서버가 대신 전달, R-1)
+ * - 마이크 + 면접관 음성을 섞어 녹음 (L-1, L-9)
+ * - 모든 시각은 녹음 그래프의 AudioContext 시계 하나로 잰다 (PRD 5절)
+ */
+export class InterviewSession {
+  private context: AudioContext | null = null;
+  private mic: MediaStream | null = null;
+  private pc: RTCPeerConnection | null = null;
+  private channel: RTCDataChannel | null = null;
+  private audioElement: HTMLAudioElement | null = null;
+  private recorder: MixedRecorder | null = null;
+  private t0 = 0;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingPosts = new Set<Promise<void>>();
+  private wrapUpPending = false;
+  private endPromise: Promise<EndResult> | null = null;
+  private usage: Record<string, number> = {};
+  private readonly tracker: TurnTracker;
+  private state: SessionSnapshot = {
+    phase: "idle",
+    elapsedMs: 0,
+    turns: [],
+    candidateSpeaking: false,
+    interviewerSpeaking: false,
+    muted: false,
+    wrapUpSent: false,
+    error: null,
+  };
+
+  constructor(
+    private readonly interviewId: string,
+    private readonly maxMinutes: number,
+    private readonly callbacks: {
+      onChange: (snapshot: SessionSnapshot) => void;
+      onEnded: (result: EndResult) => void;
+    },
+  ) {
+    this.tracker = new TurnTracker(() => this.now(), {
+      onFinal: (turn) => this.postTurn(turn),
+      onChange: () => this.sync(),
+    });
+  }
+
+  /** 녹음 기준 시계 (ms) */
+  now() {
+    if (!this.context || !this.t0) return 0;
+    return Math.max(0, Math.round((this.context.currentTime - this.t0) * 1000));
+  }
+
+  get snapshot() {
+    return this.state;
+  }
+
+  /** 사용자 클릭 핸들러 안에서 호출해야 한다(AudioContext 자동재생 정책). */
+  async start(devices: AudioDevicePrefs = { inputId: "", outputId: "" }) {
+    this.update({ phase: "connecting", error: null });
+    try {
+      this.mic = await openMicrophone(devices.inputId);
+      this.context = new AudioContext();
+      await this.context.resume();
+
+      this.recorder = new MixedRecorder(this.context, this.interviewId);
+      this.recorder.addStream(this.mic);
+      await this.recorder.start();
+      this.t0 = this.context.currentTime || 1e-6;
+
+      const pc = new RTCPeerConnection();
+      this.pc = pc;
+      // Chrome은 원격 WebRTC 트랙을 미디어 요소에 붙여야 Web Audio로 소리가 흐른다 (L-1).
+      this.audioElement = document.createElement("audio");
+      this.audioElement.autoplay = true;
+      await routeToSpeaker(this.audioElement, devices.outputId);
+      pc.ontrack = (event) => {
+        const [stream] = event.streams;
+        if (!stream || !this.audioElement) return;
+        this.audioElement.srcObject = stream;
+        this.recorder?.addStream(stream);
+      };
+      pc.onconnectionstatechange = () => this.onConnectionState(pc.connectionState);
+      for (const track of this.mic.getAudioTracks()) pc.addTrack(track, this.mic);
+
+      const channel = pc.createDataChannel("oai-events");
+      this.channel = channel;
+      channel.onmessage = (message) => this.onServerEvent(message.data);
+      channel.onopen = () => {
+        this.update({ phase: "live" });
+        this.send({ type: "response.create" }); // R-2: 면접관이 먼저 인사
+        this.timer = setInterval(() => this.tick(), 250);
+      };
+      channel.onclose = () => {
+        if (this.state.phase === "live") void this.end("disconnected");
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const response = await fetch(`/api/realtime/call?interviewId=${this.interviewId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: offer.sdp,
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+        throw new Error(body?.error?.message ?? `연결 실패 (${response.status})`);
+      }
+      await pc.setRemoteDescription({ type: "answer", sdp: await response.text() });
+    } catch (error) {
+      const message =
+        error instanceof DOMException && error.name === "NotAllowedError"
+          ? "마이크 권한이 거부되었습니다. 브라우저 주소창의 권한 설정에서 마이크를 허용해 주세요."
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      this.update({ error: message });
+      await this.end("error");
+      throw error;
+    }
+  }
+
+  setMuted(muted: boolean) {
+    for (const track of this.mic?.getAudioTracks() ?? []) track.enabled = !muted;
+    this.update({ muted });
+  }
+
+  end(reason: EndReason): Promise<EndResult> {
+    this.endPromise ??= this.finish(reason);
+    return this.endPromise;
+  }
+
+  private async finish(reason: EndReason): Promise<EndResult> {
+    this.update({ phase: "ending" });
+    if (this.timer) clearInterval(this.timer);
+    if (this.disconnectTimer) clearTimeout(this.disconnectTimer);
+
+    const durationMs = this.now();
+    this.tracker.flush();
+
+    const recording = this.recorder ? await this.recorder.stop(durationMs).catch(() => null) : null;
+
+    this.channel?.close();
+    this.pc?.close();
+    for (const track of this.mic?.getTracks() ?? []) track.stop();
+    if (this.audioElement) this.audioElement.srcObject = null;
+    await this.context?.close().catch(() => {});
+
+    await Promise.allSettled([...this.pendingPosts]);
+
+    const status = reason === "user" || reason === "timeout" ? "completed" : "aborted";
+    await fetch(`/api/interviews/${this.interviewId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, durationMs, audioStatus: recording?.size ? "pending" : "none" }),
+    }).catch((error) => console.error("면접 상태 저장 실패", error));
+
+    const upload: UploadResult = recording?.size
+      ? await uploadRecording(this.interviewId, recording)
+      : { ok: false, error: "녹음이 없습니다." };
+
+    const latencies = this.tracker.latencies;
+    const metrics: SessionMetrics = {
+      latencyP50: percentile(latencies, 50),
+      latencyP95: percentile(latencies, 95),
+      latencySamples: latencies.length,
+      usage: this.usage,
+    };
+    console.info("[interview metrics]", metrics);
+    const result: EndResult = { reason, status, durationMs, upload, metrics };
+    this.update({ phase: "ended" });
+    this.callbacks.onEnded(result);
+    return result;
+  }
+
+  private onConnectionState(state: RTCPeerConnectionState) {
+    if (this.state.phase !== "live") return;
+    if (state === "failed") void this.end("disconnected");
+    else if (state === "disconnected") {
+      this.disconnectTimer ??= setTimeout(() => {
+        if (this.pc?.connectionState !== "connected") void this.end("disconnected");
+      }, DISCONNECT_GRACE_MS);
+    } else if (state === "connected" && this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
+  }
+
+  private onServerEvent(raw: unknown) {
+    let event: ServerEvent;
+    try {
+      event = JSON.parse(String(raw)) as ServerEvent;
+    } catch {
+      return;
+    }
+    if (event.type === "error") {
+      const error = event.error as { message?: string } | undefined;
+      console.error("Realtime error", event);
+      this.update({ error: error?.message ?? "Realtime 오류" });
+      return;
+    }
+    if (event.type === "response.done") {
+      addUsage(this.usage, (event.response as { usage?: unknown } | undefined)?.usage, "response");
+    } else if (event.type === "conversation.item.input_audio_transcription.completed") {
+      addUsage(this.usage, event.usage, "transcription");
+    }
+    this.tracker.handle(event);
+    // R-8: 지원자가 말하는 중이었다면 답변이 끝난 뒤에 마무리 지시를 보낸다.
+    if (event.type === "input_audio_buffer.speech_stopped" && this.wrapUpPending) this.sendWrapUp();
+  }
+
+  private tick() {
+    const elapsedMs = this.now();
+    const limitMs = this.maxMinutes * 60_000;
+    if (!this.state.wrapUpSent && !this.wrapUpPending && elapsedMs >= limitMs - 60_000) {
+      this.wrapUpPending = true;
+      if (!this.tracker.candidateSpeaking) this.sendWrapUp();
+    }
+    if (elapsedMs >= limitMs) {
+      void this.end("timeout");
+      return;
+    }
+    this.update({ elapsedMs });
+  }
+
+  private sendWrapUp() {
+    this.wrapUpPending = false;
+    this.send({
+      type: "conversation.item.create",
+      item: { type: "message", role: "system", content: [{ type: "input_text", text: WRAP_UP_INSTRUCTION }] },
+    });
+    this.update({ wrapUpSent: true });
+  }
+
+  private send(event: Record<string, unknown>) {
+    if (this.channel?.readyState === "open") this.channel.send(JSON.stringify(event));
+  }
+
+  private postTurn(turn: FinalTurn) {
+    const post = (async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const response = await fetch(`/api/interviews/${this.interviewId}/turns`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(turn),
+          });
+          if (response.ok) return;
+        } catch {
+          // 네트워크 오류는 재시도
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
+      }
+      console.error("턴 저장 실패", turn);
+    })();
+    this.pendingPosts.add(post);
+    void post.finally(() => this.pendingPosts.delete(post));
+  }
+
+  private sync() {
+    this.update({
+      turns: this.tracker.liveTurns(),
+      candidateSpeaking: this.tracker.candidateSpeaking,
+      interviewerSpeaking: this.tracker.interviewerSpeaking,
+    });
+  }
+
+  private update(patch: Partial<SessionSnapshot>) {
+    this.state = { ...this.state, ...patch };
+    this.callbacks.onChange(this.state);
+  }
+}

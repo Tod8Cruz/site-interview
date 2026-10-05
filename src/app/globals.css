@@ -1,26 +1,114 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --surface-2: #f0efec;
+  --border: #e3e1dc;
+  --text: #1c1b19;
+  --muted: #6b6862;
+  --primary: #2f5d50;
+  --primary-fg: #ffffff;
+  --accent: #b5562b;
+  --danger: #b42318;
+  --success: #2e7d4f;
+  --warning: #a15c07;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --bg: #151514;
+    --surface: #1d1d1b;
+    --surface-2: #262624;
+    --border: #34332f;
+    --text: #ecebe7;
+    --muted: #a19e97;
+    --primary: #7fb8a4;
+    --primary-fg: #10201b;
+    --accent: #e08a5f;
+    --danger: #f2826f;
+    --success: #7cc79a;
+    --warning: #e3a44c;
   }
 }
 
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-primary-fg: var(--primary-fg);
+  --color-accent: var(--accent);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+    "Noto Sans KR", "Malgun Gothic", sans-serif;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3.5 py-2 text-sm font-medium transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply border-transparent bg-primary text-primary-fg hover:bg-primary hover:opacity-90;
+  }
+  .btn-danger {
+    @apply border-transparent bg-danger text-white hover:bg-danger hover:opacity-90;
+  }
+  .btn-sm {
+    @apply px-2.5 py-1 text-xs;
+  }
+  .input {
+    @apply w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20;
+  }
+  .label {
+    @apply mb-1 block text-sm font-medium;
+  }
+  .card {
+    @apply rounded-xl border border-border bg-surface;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted;
+  }
+}
+
+/* Chrome 기본 오디오 컨트롤은 회색 패널이라 진행 막대가 잘 안 보인다. */
+audio::-webkit-media-controls-panel {
+  background-color: #ffffff;
+}
+
+/* /api-docs — Markdown 컴포넌트 위에 문서용 크기·표·코드 블록을 얹는다. */
+.api-docs h1 {
+  @apply mb-4 text-2xl;
+}
+.api-docs h2 {
+  @apply mt-10 border-b border-border pb-1 text-lg;
+}
+.api-docs h3 {
+  @apply mt-6 font-mono text-base;
+}
+.api-docs pre {
+  @apply overflow-x-auto rounded-lg border border-border bg-surface-2 p-3 text-xs leading-relaxed;
+}
+.api-docs pre code {
+  @apply bg-transparent p-0;
+}
+.api-docs table {
+  @apply block w-full overflow-x-auto border-collapse text-xs;
+}
+.api-docs th,
+.api-docs td {
+  @apply border border-border px-2 py-1.5 text-left align-top;
+}
+.api-docs th {
+  @apply bg-surface-2 font-medium;
 }
