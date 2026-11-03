@@ -1,19 +1,34 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AUDIO_LABEL, formatDateTime, formatDuration, STATUS_LABEL } from "@/lib/format";
+import { getEvaluation } from "@/server/evaluations";
 import { isUuid } from "@/server/http";
-import { getInterview, getInterviewTurns } from "@/server/interviews";
+import { getInterview, getInterviewRecordings, getInterviewTurns } from "@/server/interviews";
 import { getQuestionsByIds } from "@/server/questions";
+import { listRubrics } from "@/server/rubrics";
+import { getOpenAIApiKey } from "@/server/settings";
 import { DeleteInterviewButton } from "../delete-button";
+import { EvaluationPanel } from "./evaluation-panel";
 import { Replay } from "./replay";
 import { TitleEditor } from "./title-editor";
 
 export default async function InterviewPage(props: PageProps<"/interviews/[id]">) {
   const { id } = await props.params;
   if (!isUuid(id)) notFound();
-  const [interview, turns] = await Promise.all([getInterview(id), getInterviewTurns(id)]);
+  const [interview, turns, recordings, evaluation, rubrics, apiKey] = await Promise.all([
+    getInterview(id),
+    getInterviewTurns(id),
+    getInterviewRecordings(id),
+    getEvaluation(id),
+    listRubrics(),
+    getOpenAIApiKey(),
+  ]);
   if (!interview) notFound();
   const questions = await getQuestionsByIds(interview.questionIds);
+
+  const finished = interview.status === "completed" || interview.status === "aborted";
+  const hasAnswers = turns.some((t) => t.role === "candidate" && t.text.trim());
+  const blockedReason = !finished ? "면접을 마친 뒤에 평가할 수 있습니다." : !hasAnswers ? "평가할 지원자 답변이 없습니다." : null;
 
   return (
     <>
@@ -29,13 +44,16 @@ export default async function InterviewPage(props: PageProps<"/interviews/[id]">
           {interview.status === "in_progress" && (
             <Link href={`/interviews/${id}/live`} className="btn btn-primary">면접 화면으로</Link>
           )}
+          {interview.status === "paused" && (
+            <Link href={`/interviews/${id}/live`} className="btn btn-primary">이어하기</Link>
+          )}
           <DeleteInterviewButton id={id} redirectTo="/interviews" />
         </div>
       </div>
       <Replay
         interviewId={id}
         title={interview.title}
-        audioUrl={interview.audioUrl}
+        segments={recordings.map((r) => ({ url: r.url, startMs: r.startMs, durationMs: r.durationMs }))}
         audioStatus={interview.audioStatus}
         questions={questions.map((q) => ({ id: q.id, question: q.question }))}
         turns={turns.map((t) => ({
@@ -49,6 +67,22 @@ export default async function InterviewPage(props: PageProps<"/interviews/[id]">
           noteQuestionId: t.noteQuestionId,
           questionId: t.questionId,
         }))}
+      />
+      <EvaluationPanel
+        interviewId={id}
+        canEvaluate={blockedReason === null}
+        blockedReason={blockedReason}
+        openaiConfigured={Boolean(apiKey)}
+        rubrics={rubrics.map((r) => ({ id: r.id, name: r.name, isDefault: r.isDefault }))}
+        evaluation={
+          evaluation && {
+            rubricName: evaluation.rubricName,
+            criteria: evaluation.criteria,
+            model: evaluation.model,
+            result: evaluation.result,
+            evaluatedAt: formatDateTime(evaluation.updatedAt),
+          }
+        }
       />
       <details className="card mt-4 p-4 text-sm">
         <summary className="cursor-pointer font-medium">사용한 프롬프트 (면접 시작 시점 스냅샷)</summary>

@@ -180,12 +180,13 @@ function StartForm({
     }
   }
 
-  async function abortRunning() {
+  /** 진행 중인 면접을 일시정지로 돌린다(나중에 이어할 수 있다). 진행 시간은 서버가 턴 기록으로 추정한다. */
+  async function pauseRunning() {
     if (!conflictId) return;
     await fetch(`/api/interviews/${conflictId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "aborted" }),
+      body: JSON.stringify({ status: "paused" }),
     });
     setConflictId(null);
     setError(null);
@@ -338,7 +339,7 @@ function StartForm({
             {conflictId && (
               <div className="mt-2 flex gap-2">
                 <a href={`/interviews/${conflictId}/live`} className="btn btn-sm">진행 중인 면접으로</a>
-                <button type="button" className="btn btn-sm" onClick={abortRunning}>그 면접 중단 처리</button>
+                <button type="button" className="btn btn-sm" onClick={pauseRunning}>그 면접 일시정지</button>
               </div>
             )}
           </div>

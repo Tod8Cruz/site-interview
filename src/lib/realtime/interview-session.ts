@@ -1,11 +1,23 @@
 import { openMicrophone, routeToSpeaker, type AudioDevicePrefs } from "@/lib/audio-devices";
 import { MixedRecorder } from "@/lib/recorder/mixed-recorder";
-import { uploadRecording, type UploadResult } from "@/lib/recorder/upload";
-import { QuestionTracker, type ProtocolQuestion } from "./question-protocol";
+import { uploadSegment, type UploadResult } from "@/lib/recorder/upload";
+import { needsFollowUpResponse, QuestionTracker, type ProtocolQuestion } from "./question-protocol";
+import { buildResumeItems, type ResumeTurn } from "./resume-context";
 import { TurnTracker, type FinalTurn, type LiveTurn, type ServerEvent } from "./turn-tracker";
 
-export type EndReason = "user" | "timeout" | "disconnected" | "error";
+export type EndReason = "user" | "timeout" | "pause" | "disconnected" | "error";
 export type SessionPhase = "idle" | "connecting" | "live" | "ending" | "ended";
+
+/** 일시정지된 면접을 이어갈 때 넘기는 이전 상태 */
+export type ResumeState = {
+  /** 이전 구간까지의 누적 진행 시간. 이번 구간의 시계가 여기서 이어진다. */
+  activeMs: number;
+  /** 일시정지 시점의 질문 번호(0부터). 인사 단계면 null */
+  questionIndex: number | null;
+  /** 저장된 대화. 면접관에게 다시 들려준다. */
+  turns: ResumeTurn[];
+  pausedForMs: number;
+};
 
 export type SessionSnapshot = {
   phase: SessionPhase;
@@ -34,7 +46,8 @@ export type SessionMetrics = {
 
 export type EndResult = {
   reason: EndReason;
-  status: "completed" | "aborted";
+  status: "paused" | "completed" | "aborted";
+  /** 누적 진행 시간 */
   durationMs: number;
   upload: UploadResult;
   metrics: SessionMetrics;
@@ -66,6 +79,8 @@ function addUsage(total: Record<string, number>, usage: unknown, prefix = "") {
  * - WebRTC로 OpenAI Realtime에 연결 (SDP는 서버가 대신 전달, R-1)
  * - 마이크 + 면접관 음성을 섞어 녹음 (L-1, L-9)
  * - 모든 시각은 녹음 그래프의 AudioContext 시계 하나로 잰다 (PRD 5절)
+ * - 일시정지는 통화를 끝내고 상태를 저장하는 것이고, 재개는 새 통화를 열어 이전 대화를 주입하는 것이다.
+ *   누적 시계는 이전 구간의 진행 시간(baseMs)에서 이어진다.
  */
 export class InterviewSession {
   private context: AudioContext | null = null;
@@ -75,6 +90,7 @@ export class InterviewSession {
   private audioElement: HTMLAudioElement | null = null;
   private recorder: MixedRecorder | null = null;
   private t0 = 0;
+  private readonly baseMs: number;
   private timer: ReturnType<typeof setInterval> | null = null;
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingPosts = new Set<Promise<void>>();
@@ -104,8 +120,11 @@ export class InterviewSession {
       onChange: (snapshot: SessionSnapshot) => void;
       onEnded: (result: EndResult) => void;
     },
+    private readonly resume: ResumeState | null = null,
   ) {
-    this.questions = new QuestionTracker(questions);
+    this.baseMs = resume?.activeMs ?? 0;
+    this.questions = new QuestionTracker(questions, resume?.questionIndex ?? null);
+    this.state = { ...this.state, elapsedMs: this.baseMs, currentQuestionIndex: this.questions.current };
     this.tracker = new TurnTracker(
       () => this.now(),
       { onFinal: (turn) => this.postTurn(turn), onChange: () => this.sync() },
@@ -113,10 +132,15 @@ export class InterviewSession {
     );
   }
 
-  /** 녹음 기준 시계 (ms) */
+  /** 누적 진행 시계 (ms). 이전 구간의 진행 시간에 이번 구간의 녹음 시계를 더한다. */
   now() {
-    if (!this.context || !this.t0) return 0;
-    return Math.max(0, Math.round((this.context.currentTime - this.t0) * 1000));
+    if (!this.context || !this.t0) return this.baseMs;
+    return this.baseMs + Math.max(0, Math.round((this.context.currentTime - this.t0) * 1000));
+  }
+
+  /** 이번 구간의 녹음 길이 (ms) */
+  private segmentMs() {
+    return this.now() - this.baseMs;
   }
 
   get snapshot() {
@@ -131,7 +155,7 @@ export class InterviewSession {
       this.context = new AudioContext();
       await this.context.resume();
 
-      this.recorder = new MixedRecorder(this.context, this.interviewId);
+      this.recorder = new MixedRecorder(this.context, this.interviewId, this.baseMs);
       this.recorder.addStream(this.mic);
       await this.recorder.start();
       this.t0 = this.context.currentTime || 1e-6;
@@ -155,9 +179,18 @@ export class InterviewSession {
       this.channel = channel;
       channel.onmessage = (message) => this.onServerEvent(message.data);
       channel.onopen = () => {
+        // 재개: 이전 대화를 먼저 넣어야 첫 응답이 이어가는 말이 된다. 데이터 채널은 순서가 보장된다.
+        if (this.resume?.turns.length) {
+          const items = buildResumeItems(this.resume.turns, {
+            questionIndex: this.resume.questionIndex,
+            questionCount: this.questionCount,
+            pausedForMs: this.resume.pausedForMs,
+          });
+          for (const item of items) this.send(item);
+        }
         this.update({ phase: "live" });
         this.applyMicGate();
-        this.send({ type: "response.create" }); // R-2: 면접관이 먼저 인사
+        this.send({ type: "response.create" }); // R-2: 면접관이 먼저 인사(재개면 이어가겠다는 말)
         this.timer = setInterval(() => this.tick(), 250);
       };
       channel.onclose = () => {
@@ -189,6 +222,16 @@ export class InterviewSession {
     }
   }
 
+  private get questionCount() {
+    return this.questions.count;
+  }
+
+  /** 일시정지. 마무리 안내가 이미 나갔으면(마지막 1분) 그냥 끝내는 편이 낫다. */
+  pause() {
+    if (this.state.wrapUpSent) return null;
+    return this.end("pause");
+  }
+
   setMuted(muted: boolean) {
     this.update({ muted });
     this.applyMicGate();
@@ -215,9 +258,10 @@ export class InterviewSession {
     if (this.disconnectTimer) clearTimeout(this.disconnectTimer);
 
     const durationMs = this.now();
+    const segmentMs = this.segmentMs();
     this.tracker.flush();
 
-    const recording = this.recorder ? await this.recorder.stop(durationMs).catch(() => null) : null;
+    const recording = this.recorder ? await this.recorder.stop(segmentMs).catch(() => null) : null;
 
     this.channel?.close();
     this.pc?.close();
@@ -227,15 +271,28 @@ export class InterviewSession {
 
     await Promise.allSettled([...this.pendingPosts]);
 
-    const status = reason === "user" || reason === "timeout" ? "completed" : "aborted";
+    // 사용자 종료·시간 초과는 완료, 일시정지와 연결 끊김은 일시정지(나중에 이어하기), 그 밖의 오류는 중단.
+    // 단 오류라도 대화가 있었으면 이어할 수 있게 일시정지로 둔다.
+    const status: EndResult["status"] =
+      reason === "user" || reason === "timeout"
+        ? "completed"
+        : reason === "pause" || reason === "disconnected" || this.tracker.liveTurns().length > 0 || this.baseMs > 0
+          ? "paused"
+          : "aborted";
     await fetch(`/api/interviews/${this.interviewId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status, durationMs, audioStatus: recording?.size ? "pending" : "none" }),
+      body: JSON.stringify({
+        status,
+        durationMs,
+        currentQuestionIndex: this.questions.current,
+        // 다른 구간의 녹음은 이미 올라가 있을 수 있으므로, 이번 구간이 없을 때는 집계 상태를 건드리지 않는다.
+        ...(recording?.size ? { audioStatus: "pending" } : {}),
+      }),
     }).catch((error) => console.error("면접 상태 저장 실패", error));
 
     const upload: UploadResult = recording?.size
-      ? await uploadRecording(this.interviewId, recording)
+      ? await uploadSegment(this.interviewId, this.baseMs, { blob: recording, durationMs: segmentMs })
       : { ok: false, error: "녹음이 없습니다." };
 
     const latencies = this.tracker.latencies;
@@ -303,10 +360,10 @@ export class InterviewSession {
         item: { type: "function_call_output", call_id: reply.callId, output: reply.output },
       });
     }
-    // 응답에 음성(message)이 함께 있었으면 다음 응답은 VAD가 만들므로 생략해 왕복 지연을 피한다.
-    // 도구 호출만 있는 응답이면 아무도 말하지 않아 멈추므로 새 응답을 요청한다.
-    const output = (event.response as { output?: { type?: string }[] } | undefined)?.output ?? [];
-    if (replies.length && !output.some((item) => item.type === "message")) this.send({ type: "response.create" });
+    // 도구 호출 뒤에 질문을 말했으면 다음 응답은 VAD가 만들므로 생략해 왕복 지연을 피한다.
+    // 호출로 끝난 응답이면(앞에 "잠시만요" 같은 말만 있어도) 아무도 질문하지 않아 멈추므로 새 응답을 요청한다.
+    const output = (event.response as { output?: { type?: string; name?: string }[] } | undefined)?.output ?? [];
+    if (replies.length && needsFollowUpResponse(output)) this.send({ type: "response.create" });
     if (this.questions.current !== this.state.currentQuestionIndex) {
       this.update({ currentQuestionIndex: this.questions.current });
     }

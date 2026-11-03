@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AudioStatus } from "@/db/schema";
 import { formatDuration } from "@/lib/format";
-import { loadRecording } from "@/lib/recorder/chunk-store";
+import { listInterviewRecordings, loadRecording } from "@/lib/recorder/chunk-store";
+import { TIMESLICE_MS } from "@/lib/recorder/mixed-recorder";
 import { makeSeekable } from "@/lib/recorder/seekable";
-import { downloadLocalRecording, uploadRecording } from "@/lib/recorder/upload";
+import { segmentAt, sortSegments, totalDurationMs, type Segment } from "@/lib/recorder/segments";
+import { downloadLocalRecording, uploadPendingSegments } from "@/lib/recorder/upload";
 import {
   answerMetrics,
   suggestQuestion,
@@ -20,7 +22,8 @@ import {
 type Props = {
   interviewId: string;
   title: string;
-  audioUrl: string | null;
+  /** 업로드된 녹음 구간 (일시정지로 나뉜 파일들) */
+  segments: Segment[];
   audioStatus: AudioStatus;
   turns: ReviewTurn[];
   questions: ReviewQuestion[];
@@ -30,40 +33,51 @@ const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}초`;
 const RATES = [1, 1.25, 1.5, 2];
 const average =(values: number[]) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : null);
 
-export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initialTurns, questions }: Props) {
+export function Replay({ interviewId, title, segments: remoteSegments, audioStatus, turns: initialTurns, questions }: Props) {
   const router = useRouter();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [turns, setTurns] = useState(initialTurns);
-  const [localUrl, setLocalUrl] = useState<string | null>(null);
-  const [hasLocal, setHasLocal] = useState(false);
-  const [currentMs, setCurrentMs] = useState(0);
-  const [durationMs, setDurationMs] = useState(0);
+  const [localSegments, setLocalSegments] = useState<Segment[]>([]);
+  const [segmentIndex, setSegmentIndex] = useState(0);
+  /** 구간 파일을 바꾼 뒤 메타데이터가 로드되면 적용할 위치(구간 안의 ms)와 재생 여부 */
+  const pendingSeek = useRef<{ localMs: number; play: boolean } | null>(null);
+  const [segmentMs, setSegmentMs] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [rate, setRate] = useState(1);
   const [uploadState, setUploadState] = useState<{ busy: boolean; error?: string }>({ busy: false });
   const [copied, setCopied] = useState(false);
 
-  // 업로드 전이면 이 브라우저에 남은 녹음(IndexedDB)으로 재생한다.
+  // 아직 업로드되지 않은 구간은 이 브라우저에 남은 녹음(IndexedDB)으로 재생한다.
   useEffect(() => {
-    if (audioUrl) return;
-    let url: string | null = null;
+    const urls: string[] = [];
     let cancelled = false;
     void (async () => {
-      const stored = await loadRecording(interviewId).catch(() => null);
-      if (!stored || cancelled) return;
-      const file = await makeSeekable(stored.blob).catch(() => stored.blob);
-      if (cancelled) return;
-      url = URL.createObjectURL(file);
-      setLocalUrl(url);
-      setHasLocal(true);
+      const stored = await listInterviewRecordings(interviewId).catch(() => []);
+      const found: Segment[] = [];
+      for (const meta of stored) {
+        if (remoteSegments.some((s) => s.startMs === meta.startMs)) continue;
+        const recording = await loadRecording(meta.key).catch(() => null);
+        if (!recording || cancelled) continue;
+        const file = await makeSeekable(recording.blob).catch(() => recording.blob);
+        if (cancelled) break;
+        const url = URL.createObjectURL(file);
+        urls.push(url);
+        found.push({ url, startMs: meta.startMs, durationMs: meta.durationMs ?? recording.chunkCount * TIMESLICE_MS });
+      }
+      if (!cancelled) setLocalSegments(found);
     })();
     return () => {
       cancelled = true;
-      if (url) URL.revokeObjectURL(url);
+      for (const url of urls) URL.revokeObjectURL(url);
     };
-  }, [audioUrl, interviewId]);
+  }, [remoteSegments, interviewId]);
 
-  const src = audioUrl ?? localUrl;
+  const segments = useMemo(() => sortSegments([...remoteSegments, ...localSegments]), [remoteSegments, localSegments]);
+  const hasLocal = localSegments.length > 0;
+  const current = segments[Math.min(segmentIndex, segments.length - 1)] ?? null;
+  const src = current?.url ?? null;
+  const durationMs = useMemo(() => totalDurationMs(segments), [segments]);
+  const currentMs = (current?.startMs ?? 0) + segmentMs;
   const metrics = useMemo(() => answerMetrics(turns), [turns]);
 
   const summary = useMemo(() => {
@@ -90,11 +104,41 @@ export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initi
     return found;
   }, [turns, currentMs]);
 
-  function seek(ms: number) {
+  /** 누적 시계의 ms 지점으로 이동한다. 다른 구간이면 파일을 바꾼 뒤 메타데이터가 로드될 때 위치를 맞춘다. */
+  function seekTo(ms: number, play: boolean) {
     const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = ms / 1000;
-    void audio.play();
+    if (!audio || !segments.length) return;
+    const index = Math.max(0, segmentAt(segments, ms));
+    const localMs = Math.max(0, ms - segments[index].startMs);
+    if (index !== segmentIndex) {
+      pendingSeek.current = { localMs, play };
+      setSegmentMs(localMs);
+      setSegmentIndex(index);
+      return;
+    }
+    audio.currentTime = localMs / 1000;
+    if (play) void audio.play();
+  }
+
+  const seek = (ms: number) => seekTo(ms, true);
+
+  function onLoadedMetadata() {
+    const audio = audioRef.current;
+    const pending = pendingSeek.current;
+    pendingSeek.current = null;
+    if (!audio || !pending) return;
+    audio.playbackRate = rate;
+    audio.currentTime = pending.localMs / 1000;
+    if (pending.play) void audio.play();
+  }
+
+  /** 구간이 끝나면 다음 구간을 이어서 튼다 */
+  function onEnded() {
+    if (segmentIndex < segments.length - 1) {
+      pendingSeek.current = { localMs: 0, play: true };
+      setSegmentMs(0);
+      setSegmentIndex(segmentIndex + 1);
+    } else setPlaying(false);
   }
 
   function togglePlay() {
@@ -112,7 +156,7 @@ export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initi
 
   async function retryUpload() {
     setUploadState({ busy: true });
-    const result = await uploadRecording(interviewId);
+    const result = await uploadPendingSegments(interviewId);
     if (result.ok) {
       setUploadState({ busy: false });
       router.refresh();
@@ -141,21 +185,18 @@ export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initi
 
   return (
     <div className="space-y-4">
-      <div className="card sticky top-16 z-[5] p-3">
+      <div className="card sticky top-16 z-[5] p-3 md:top-4">
         {src ? (
           <div className="flex items-center gap-3 rounded-full bg-surface-2 px-3 py-2">
             <audio
               ref={audioRef}
               src={src}
               preload="metadata"
-              onTimeUpdate={(e) => setCurrentMs(e.currentTarget.currentTime * 1000)}
-              onDurationChange={(e) => {
-                const d = e.currentTarget.duration;
-                setDurationMs(Number.isFinite(d) ? d * 1000 : 0);
-              }}
+              onTimeUpdate={(e) => setSegmentMs(e.currentTarget.currentTime * 1000)}
+              onLoadedMetadata={onLoadedMetadata}
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
-              onEnded={() => setPlaying(false)}
+              onEnded={onEnded}
             />
             <button
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-fg hover:opacity-90"
@@ -177,10 +218,7 @@ export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initi
               step={100}
               value={Math.min(currentMs, durationMs)}
               disabled={!durationMs}
-              onChange={(e) => {
-                const audio = audioRef.current;
-                if (audio) audio.currentTime = Number(e.target.value) / 1000;
-              }}
+              onChange={(e) => seekTo(Number(e.target.value), playing)}
               style={{ "--progress": `${durationMs ? (currentMs / durationMs) * 100 : 0}%` } as CSSProperties}
               aria-label="재생 위치"
             />
@@ -193,9 +231,16 @@ export function Replay({ interviewId, title, audioUrl, audioStatus, turns: initi
             {audioStatus === "none" ? "이 면접에는 녹음이 없습니다." : "녹음을 찾는 중이거나 이 브라우저에 없습니다."}
           </p>
         )}
-        {!audioUrl && hasLocal && (
+        {segments.length > 1 && (
+          <p className="mt-1 px-2 text-[11px] text-muted">
+            녹음 {segments.length}구간 (일시정지로 나뉨) · 지금 {segmentIndex + 1}구간
+          </p>
+        )}
+        {hasLocal && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-warning">이 브라우저에 보관된 녹음입니다. 아직 업로드되지 않았습니다.</span>
+            <span className="text-warning">
+              {remoteSegments.length ? "일부 구간은 " : ""}이 브라우저에 보관된 녹음입니다. 아직 업로드되지 않았습니다.
+            </span>
             <button className="btn btn-sm" disabled={uploadState.busy} onClick={retryUpload}>
               {uploadState.busy ? "업로드 중…" : "업로드"}
             </button>
@@ -337,7 +382,8 @@ function TurnCard({
 
   return (
     <li
-      className={`card transition-colors ${current ? "border-primary ring-2 ring-primary/20" : ""} ${
+      id={`turn-${turn.id}`}
+      className={`card scroll-mt-32 transition-colors ${current ? "border-primary ring-2 ring-primary/20" : ""} ${
         turn.role === "candidate" ? "border-l-4 border-l-primary" : ""
       }`}
     >

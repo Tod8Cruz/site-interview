@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { deleteRecording, listStoredRecordings } from "@/lib/recorder/chunk-store";
-import { uploadRecording } from "@/lib/recorder/upload";
+import { uploadPendingSegments } from "@/lib/recorder/upload";
 
 type Outcome = { uploaded: string[]; failed: string[] };
 
@@ -27,8 +27,8 @@ function markTried(id: string) {
 }
 
 /**
- * L-10: 앱에 접속하면 이 브라우저(IndexedDB)에 남아 있는 미업로드 녹음을 찾아 업로드한다.
- * 진행 중인 면접과 이미 업로드된 면접은 건드리지 않는다. 탭 세션당 면접별로 한 번만 시도한다.
+ * L-10: 앱에 접속하면 이 브라우저(IndexedDB)에 남아 있는 미업로드 녹음 구간을 찾아 업로드한다.
+ * 진행 중인 면접은 건드리지 않는다(일시정지된 면접의 구간은 올린다). 탭 세션당 면접별로 한 번만 시도한다.
  */
 export function RecordingRecovery() {
   const pathname = usePathname();
@@ -38,25 +38,21 @@ export function RecordingRecovery() {
     let cancelled = false;
     void (async () => {
       const stored = await listStoredRecordings().catch(() => []);
+      const interviewIds = Array.from(new Set(stored.map((meta) => meta.interviewId)));
       const result: Outcome = { uploaded: [], failed: [] };
-      for (const meta of stored) {
-        const id = meta.interviewId;
+      for (const id of interviewIds) {
         if (cancelled || pathname === `/interviews/${id}/live` || alreadyTried(id)) continue;
         const response = await fetch(`/api/interviews/${id}`).catch(() => null);
         if (!response) continue;
         if (response.status === 404) {
-          await deleteRecording(id);
+          for (const meta of stored) if (meta.interviewId === id) await deleteRecording(meta.key);
           continue;
         }
         if (!response.ok) continue;
-        const { status, audioStatus } = (await response.json()) as { status: string; audioStatus: string };
-        if (audioStatus === "uploaded") {
-          await deleteRecording(id);
-          continue;
-        }
+        const { status } = (await response.json()) as { status: string };
         if (status === "in_progress") continue; // 아직 진행 중이거나 정리 전
         markTried(id);
-        const upload = await uploadRecording(id);
+        const upload = await uploadPendingSegments(id);
         (upload.ok ? result.uploaded : result.failed).push(id);
       }
       if (!cancelled && (result.uploaded.length || result.failed.length)) setOutcome(result);

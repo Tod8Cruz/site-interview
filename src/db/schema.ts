@@ -12,6 +12,7 @@ import {
   uuid,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import type { EvaluationResult, RubricCriterion } from "@/lib/evaluation";
 
 const timestamps = {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -71,6 +72,19 @@ export const candidateProfiles = pgTable(
   (t) => [uniqueIndex("candidate_profiles_single_default").on(t.isDefault).where(sql`${t.isDefault}`)],
 );
 
+/** 평가 기준(루브릭). 항목은 순서 있는 jsonb 배열이고, 평가할 때 통째로 스냅샷된다. */
+export const evaluationRubrics = pgTable(
+  "evaluation_rubrics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    criteria: jsonb("criteria").$type<RubricCriterion[]>().notNull(),
+    isDefault: boolean("is_default").notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("evaluation_rubrics_single_default").on(t.isDefault).where(sql`${t.isDefault}`)],
+);
+
 /** in_progress → paused → in_progress … → completed | aborted. paused는 통화가 없는 상태로, 비용이 들지 않는다. */
 export type InterviewStatus = "in_progress" | "paused" | "completed" | "aborted";
 export type AudioStatus = "none" | "pending" | "uploaded" | "failed";
@@ -115,6 +129,24 @@ export const interviews = pgTable(
 );
 
 /**
+ * AI 평가 결과. 면접 하나당 하나이고 다시 평가하면 덮어쓴다.
+ * 루브릭 이름·항목은 평가 시점 스냅샷이라 루브릭을 고치거나 지워도 결과는 그대로다.
+ */
+export const interviewEvaluations = pgTable("interview_evaluations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  interviewId: uuid("interview_id")
+    .notNull()
+    .unique()
+    .references(() => interviews.id, { onDelete: "cascade" }),
+  rubricId: uuid("rubric_id").references(() => evaluationRubrics.id, { onDelete: "set null" }),
+  rubricName: text("rubric_name").notNull(),
+  criteria: jsonb("criteria").$type<RubricCriterion[]>().notNull(),
+  model: text("model").notNull(),
+  result: jsonb("result").$type<EvaluationResult>().notNull(),
+  ...timestamps,
+});
+
+/**
  * 녹음 구간. 통화 구간(시작~일시정지, 재개~종료)마다 파일 하나씩 Vercel Blob에 둔다.
  * start_ms는 누적 진행 시계에서 이 구간이 시작하는 지점이라, 턴의 start_ms로 구간을 찾을 수 있다.
  */
@@ -125,8 +157,7 @@ export const interviewRecordings = pgTable(
     interviewId: uuid("interview_id")
       .notNull()
       .references(() => interviews.id, { onDelete: "cascade" }),
-    /** 구간 순서 (0부터) */
-    seq: integer("seq").notNull(),
+    /** 누적 시계에서 이 구간이 시작하는 지점. 구간의 식별자이기도 하다. */
     startMs: integer("start_ms").notNull(),
     durationMs: integer("duration_ms").notNull(),
     mimeType: text("mime_type").notNull(),
@@ -135,7 +166,7 @@ export const interviewRecordings = pgTable(
     bytes: integer("bytes").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique("interview_recordings_seq_unique").on(t.interviewId, t.seq)],
+  (t) => [unique("interview_recordings_start_unique").on(t.interviewId, t.startMs)],
 );
 
 export type TurnRole = "interviewer" | "candidate";
@@ -198,3 +229,5 @@ export type Interview = typeof interviews.$inferSelect;
 export type InterviewTurn = typeof interviewTurns.$inferSelect;
 export type InterviewRecording = typeof interviewRecordings.$inferSelect;
 export type ApiToken = typeof apiTokens.$inferSelect;
+export type EvaluationRubric = typeof evaluationRubrics.$inferSelect;
+export type InterviewEvaluation = typeof interviewEvaluations.$inferSelect;

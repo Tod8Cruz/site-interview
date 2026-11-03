@@ -1,6 +1,6 @@
 import "server-only";
 import type { Interview } from "@/db/schema";
-import { startQuestionTool } from "@/lib/realtime/question-protocol";
+import { resumeProtocol, startQuestionTool } from "@/lib/realtime/question-protocol";
 import { OPENAI_BASE_URL } from "./openai";
 import { getOpenAIApiKey } from "./settings";
 
@@ -27,13 +27,19 @@ function turnDetection(snapshot: Interview["turnDetection"]) {
   };
 }
 
-/** OpenAI Realtime 세션 설정 (session.type = "realtime") */
-export function buildRealtimeSession(interview: Interview) {
+/**
+ * OpenAI Realtime 세션 설정 (session.type = "realtime").
+ * 재개하는 통화면 지시문 뒤에 재개 프로토콜을 붙인다(대화 기록 자체는 클라이언트가 데이터 채널로 넣는다).
+ */
+export function buildRealtimeSession(interview: Interview, options: { resume?: boolean } = {}) {
   const questionCount = interview.questionIds.length;
+  const instructions = options.resume
+    ? interview.instructions + resumeProtocol(interview.currentQuestionIndex, questionCount)
+    : interview.instructions;
   return {
     type: "realtime",
     model: interview.model,
-    instructions: interview.instructions,
+    instructions,
     output_modalities: ["audio"],
     // 질문 진행 파악용 도구. 프로토콜 문구는 createInterview가 instructions에 붙인다.
     ...(questionCount > 0 ? { tools: [startQuestionTool(questionCount)], tool_choice: "auto" } : {}),

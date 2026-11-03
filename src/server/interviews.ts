@@ -2,12 +2,14 @@ import "server-only";
 import { del } from "@vercel/blob";
 import { and, asc, desc, eq, isNotNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { interviews, interviewTurns, type Interview } from "@/db/schema";
+import { interviewEvaluations, interviewRecordings, interviews, interviewTurns, type Interview } from "@/db/schema";
+import { estimateActiveMs, resumeQuestionIndex } from "@/lib/interview-time";
 import { renderPrompt } from "@/lib/prompt-template";
 import { questionProtocol } from "@/lib/realtime/question-protocol";
 import {
   interviewCreateSchema,
   interviewPatchSchema,
+  recordingSchema,
   turnNoteSchema,
   turnSchema,
   type InterviewCreateInput,
@@ -18,9 +20,7 @@ import { getProfile } from "./profiles";
 import { getPrompt } from "./prompts";
 import { hangupCall } from "./realtime";
 
-/** I-6: 비정상 종료로 방치된 면접의 유예 시간 */
-const STALE_GRACE_MINUTES = 5;
-/** 5절 서버 쪽 비용 상한: 최대 시간 + 2분이 지나면 서버가 통화를 끊는다 */
+/** 5절 서버 쪽 비용 상한: 최대 시간 + 2분이 지나면 서버가 통화를 끊고 면접을 정리한다 */
 const HANGUP_GRACE_MINUTES = 2;
 
 export class ConflictError extends Error {
@@ -34,46 +34,57 @@ export class ConflictError extends Error {
 
 export class NotFoundError extends Error {}
 
+/**
+ * 이번 통화 구간의 시간 상한. duration_ms는 이전 구간까지의 누적 진행 시간이므로 그만큼 뺀다.
+ * (startedAt은 재개할 때마다 연결 시점으로 다시 잡힌다.)
+ */
 const pastLimit = (graceMinutes: number) =>
-  lt(sql`${interviews.startedAt} + make_interval(mins => ${interviews.maxMinutes} + ${graceMinutes})`, sql`now()`);
+  lt(
+    sql`${interviews.startedAt} + make_interval(secs => (((${interviews.maxMinutes} + ${graceMinutes}) * 60 - coalesce(${interviews.durationMs}, 0) / 1000.0))::double precision)`,
+    sql`now()`,
+  );
 
 /**
- * 5절 서버 쪽 비용 상한: 최대 시간 + 2분이 지났는데 아직 통화 중인 면접은 서버가 끊는다.
- * 클라이언트 타이머가 멈춘 경우(탭 정지, 크래시)에도 비용이 계속 나가지 않게 한다.
+ * 5절 서버 쪽 비용 상한 + I-6 방치 정리: 최대 시간 + 2분이 지났는데 아직 진행 중인 면접은 통화를 끊고,
+ * 턴 기록으로 진행 시간을 추정해 일시정지로 돌린다(연결 끊김·탭 닫힘도 일시정지로 본다).
+ * 시간을 다 쓴 면접은 완료로, 아무 대화도 없는 면접은 중단으로 정리한다.
  */
-export async function hangupOverdueCalls() {
-  const overdue = await db
-    .select({ id: interviews.id, callId: interviews.realtimeCallId })
+export async function settleAbandonedInterviews() {
+  const abandoned = await db
+    .select({
+      id: interviews.id,
+      callId: interviews.realtimeCallId,
+      durationMs: interviews.durationMs,
+      maxMinutes: interviews.maxMinutes,
+      currentQuestionIndex: interviews.currentQuestionIndex,
+      questionIds: interviews.questionIds,
+    })
     .from(interviews)
-    .where(and(eq(interviews.status, "in_progress"), isNotNull(interviews.realtimeCallId), pastLimit(HANGUP_GRACE_MINUTES)));
+    .where(and(eq(interviews.status, "in_progress"), pastLimit(HANGUP_GRACE_MINUTES)));
   await Promise.all(
-    overdue.map(async ({ id, callId }) => {
-      await hangupCall(callId!);
+    abandoned.map(async (row) => {
+      if (row.callId) await hangupCall(row.callId);
+      const turns = await getInterviewTurns(row.id);
+      const activeMs = estimateActiveMs(row.durationMs, turns);
+      const limitMs = row.maxMinutes * 60_000;
+      const status = turns.length === 0 && activeMs === 0 ? "aborted" : activeMs >= limitMs ? "completed" : "paused";
       await db
         .update(interviews)
-        .set({ status: "aborted", endedAt: sql`now()`, realtimeCallId: null })
-        .where(eq(interviews.id, id));
+        .set({
+          status,
+          realtimeCallId: null,
+          durationMs: Math.min(activeMs, limitMs),
+          currentQuestionIndex: resumeQuestionIndex(row.currentQuestionIndex, turns, row.questionIds),
+          ...(status === "paused" ? { pausedAt: sql`now()` } : { endedAt: sql`now()` }),
+        })
+        .where(and(eq(interviews.id, row.id), eq(interviews.status, "in_progress")));
     }),
   );
-  return overdue.length;
-}
-
-/** I-6: started_at + max_minutes + 5분이 지난 in_progress 면접을 aborted로 바꾼다. */
-export async function abortStaleInterviews() {
-  await hangupOverdueCalls();
-  await db
-    .update(interviews)
-    .set({ status: "aborted", endedAt: sql`now()` })
-    .where(
-      and(
-        eq(interviews.status, "in_progress"),
-        pastLimit(STALE_GRACE_MINUTES),
-      ),
-    );
+  return abandoned.length;
 }
 
 export async function listInterviews() {
-  await abortStaleInterviews();
+  await settleAbandonedInterviews();
   return db
     .select({
       id: interviews.id,
@@ -82,8 +93,12 @@ export async function listInterviews() {
       promptName: interviews.promptName,
       startedAt: interviews.startedAt,
       durationMs: interviews.durationMs,
+      maxMinutes: interviews.maxMinutes,
+      currentQuestionIndex: interviews.currentQuestionIndex,
       audioStatus: interviews.audioStatus,
       questionCount: sql<number>`cardinality(${interviews.questionIds})`,
+      // select 필드 안에서 drizzle은 자기 테이블 컬럼을 테이블 이름 없이("id") 그리므로, 서브쿼리에서 바깥 테이블은 글자로 적는다.
+      evaluated: sql<boolean>`exists(select 1 from ${interviewEvaluations} e where e.interview_id = interviews.id)`,
     })
     .from(interviews)
     .orderBy(desc(interviews.startedAt));
@@ -102,6 +117,25 @@ export async function getInterviewTurns(id: string) {
     .orderBy(asc(interviewTurns.startMs), asc(interviewTurns.createdAt));
 }
 
+/** 녹음 구간을 재생 순서로 */
+export async function getInterviewRecordings(id: string) {
+  return db
+    .select()
+    .from(interviewRecordings)
+    .where(eq(interviewRecordings.interviewId, id))
+    .orderBy(asc(interviewRecordings.startMs));
+}
+
+/** 진행 중(통화가 열려 있을 수 있는) 면접. 한 번에 하나만 허용한다. */
+export async function findRunningInterview() {
+  const [running] = await db
+    .select({ id: interviews.id })
+    .from(interviews)
+    .where(eq(interviews.status, "in_progress"))
+    .limit(1);
+  return running ?? null;
+}
+
 function defaultTitle(date: Date) {
   const parts = new Intl.DateTimeFormat("ko-KR", {
     timeZone: "Asia/Seoul",
@@ -118,13 +152,10 @@ function defaultTitle(date: Date) {
 
 export async function createInterview(input: InterviewCreateInput) {
   const data = interviewCreateSchema.parse(input);
-  await abortStaleInterviews();
+  await settleAbandonedInterviews();
 
-  const [running] = await db
-    .select({ id: interviews.id })
-    .from(interviews)
-    .where(eq(interviews.status, "in_progress"))
-    .limit(1);
+  // 일시정지된 면접은 통화가 없으므로 막지 않는다. 진행 중인 면접만 하나로 제한한다.
+  const running = await findRunningInterview();
   if (running) throw new ConflictError("진행 중인 면접이 있습니다.", running.id);
 
   const prompt = await getPrompt(data.promptId);
@@ -167,20 +198,63 @@ export async function createInterview(input: InterviewCreateInput) {
   return row;
 }
 
-/** 면접이 끝나면(completed/aborted) 서버에서도 통화를 끊는다. 이미 끊긴 통화면 아무 일도 없다. */
+/**
+ * 상태 전이: in_progress|paused → paused|completed|aborted. 끝난 면접은 바꿀 수 없다.
+ * 상태가 바뀌면 서버에서도 통화를 끊는다(이미 끊긴 통화면 아무 일도 없다).
+ * 일시정지 요청에 진행 시간·질문 번호가 없으면(탭이 죽은 뒤 다른 곳에서 정리하는 경우) 턴 기록으로 추정한다.
+ */
 export async function patchInterview(id: string, input: unknown) {
   const data = interviewPatchSchema.parse(input);
+  const current = await getInterview(id);
+  if (!current) return null;
   const set: Partial<Interview> = { ...data };
   let callId: string | null = null;
   if (data.status) {
-    set.endedAt = new Date();
+    if (current.status === "completed" || current.status === "aborted") {
+      throw new ConflictError("이미 끝난 면접입니다.", id);
+    }
+    callId = current.realtimeCallId;
     set.realtimeCallId = null;
-    const current = await getInterview(id);
-    callId = current?.status === "in_progress" ? current.realtimeCallId : null;
+    const needsEstimate = data.durationMs === undefined || (data.status === "paused" && data.currentQuestionIndex === undefined);
+    const turns = needsEstimate ? await getInterviewTurns(id) : [];
+    if (data.durationMs === undefined) set.durationMs = estimateActiveMs(current.durationMs, turns);
+    if (data.status === "paused") {
+      set.pausedAt = new Date();
+      if (data.currentQuestionIndex === undefined) {
+        set.currentQuestionIndex = resumeQuestionIndex(current.currentQuestionIndex, turns, current.questionIds);
+      }
+    } else {
+      set.endedAt = new Date();
+    }
   }
   const [row] = await db.update(interviews).set(set).where(eq(interviews.id, id)).returning();
   if (row && callId) await hangupCall(callId);
   return row ?? null;
+}
+
+/** 녹음 구간 업로드 결과를 기록한다. 같은 구간을 다시 올리면 덮어쓰고 이전 파일은 지운다. */
+export async function saveRecording(interviewId: string, input: unknown) {
+  const data = recordingSchema.parse(input);
+  const [previous] = await db
+    .select({ url: interviewRecordings.url })
+    .from(interviewRecordings)
+    .where(and(eq(interviewRecordings.interviewId, interviewId), eq(interviewRecordings.startMs, data.startMs)));
+  const [row] = await db
+    .insert(interviewRecordings)
+    .values({ ...data, interviewId })
+    .onConflictDoUpdate({
+      target: [interviewRecordings.interviewId, interviewRecordings.startMs],
+      set: { durationMs: data.durationMs, mimeType: data.mimeType, url: data.url, pathname: data.pathname, bytes: data.bytes },
+    })
+    .returning();
+  await db.update(interviews).set({ audioStatus: "uploaded" }).where(eq(interviews.id, interviewId));
+  if (previous && previous.url !== data.url) await deleteBlob(previous.url);
+  return row;
+}
+
+async function deleteBlob(url: string) {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return;
+  await del(url).catch((error) => console.error("blob delete failed", error));
 }
 
 export async function updateTurnNote(interviewId: string, turnId: string, input: unknown) {
@@ -238,9 +312,10 @@ export async function saveTurn(interviewId: string, input: TurnInput) {
 }
 
 export async function deleteInterview(id: string) {
+  const recordings = await getInterviewRecordings(id);
   const [row] = await db.delete(interviews).where(eq(interviews.id, id)).returning();
-  if (row?.audioUrl && process.env.BLOB_READ_WRITE_TOKEN) {
-    await del(row.audioUrl).catch((error) => console.error("blob delete failed", error));
-  }
-  return Boolean(row);
+  if (!row) return false;
+  if (row.realtimeCallId) await hangupCall(row.realtimeCallId);
+  await Promise.all(recordings.map((r) => deleteBlob(r.url)));
+  return true;
 }

@@ -106,7 +106,6 @@ export const interviewPatchSchema = z
   .partial();
 
 export const recordingSchema = z.object({
-  seq: z.number().int().min(0),
   startMs: z.number().int().min(0),
   durationMs: z.number().int().min(0),
   mimeType: z.string().max(100),
@@ -151,3 +150,26 @@ export type ApiTokenCreateInput = z.input<typeof apiTokenCreateSchema>;
 export function formatZodError(error: z.ZodError) {
   return error.issues.map((i) => (i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message)).join("; ");
 }
+
+/** 평가 기준 항목. id가 없으면(새 행) 서버가 붙인다. */
+export const rubricCriterionSchema = z
+  .object({
+    id: z.uuid().optional(),
+    name: z.string().trim().min(1, "항목 이름을 입력하세요.").max(100),
+    description: z.string().trim().max(1000).default(""),
+  })
+  .transform((c) => ({ ...c, id: c.id ?? crypto.randomUUID() }));
+
+export const rubricSchema = z
+  .object({
+    name: z.string().trim().min(1, "이름을 입력하세요.").max(100),
+    criteria: z.array(rubricCriterionSchema).min(1, "평가 항목을 하나 이상 추가하세요.").max(20, "평가 항목은 20개까지입니다."),
+  })
+  .refine((r) => new Set(r.criteria.map((c) => c.id)).size === r.criteria.length, "항목 id가 중복됩니다.");
+
+export type RubricInput = z.input<typeof rubricSchema>;
+
+export const evaluationRunSchema = z.object({
+  /** 비우면 기본 평가 기준 */
+  rubricId: z.uuid().nullish(),
+});

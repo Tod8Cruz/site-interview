@@ -11,7 +11,9 @@
 | M5 | 다시 보기: 턴 클릭 이동, 턴별 메모(자동 저장)와 연결 질문 추천, 답변 길이·첫마디까지 걸린 시간, 재면접(전체/메모한 질문만), 기록 복사·마크다운 받기, 제목 수정, 미업로드 녹음 자동 복구 |
 | 추가 | 설정 > 지원자 정보 프로필(여러 개, 기본값). 면접 시작은 목록 화면의 모달에서 프로필·면접관·질문·목소리·시간을 고른다. 재면접 링크는 `/interviews?start=1&from={id}[&only=noted]` |
 | 추가 | 질문 API 토큰 발급·폐기(설정 > API 토큰, 해시만 저장), 로그인 없이 열리는 API 문서(`/api-docs`, AI용 마크다운 `/api/v1/docs`·`/llms.txt`), 일괄 추가(`POST /api/v1/questions/bulk`), 태그 목록(`/api/v1/tags`) |
-| M6 | 서버 쪽 비용 상한(최대 시간+2분 hangup, 종료 시 hangup, 재연결 거부), cron 가드, 방치 면접 정리, 연결 끊김·이미 시작된 면접 안내, 오류·404·로딩 화면, 삭제 시 Blob 정리 |
+| M6 | 서버 쪽 비용 상한(최대 시간+2분 hangup, 종료 시 hangup, 살아 있는 통화 재접속 거부), cron 가드, 방치 면접 정리, 연결 끊김 안내, 오류·404·로딩 화면, 삭제 시 Blob 정리 |
+| 추가 | 면접 일시정지·재개(R-10): 통화를 끝내고 누적 시간·질문 번호·녹음 구간을 저장, 이어하기 때 새 통화에 이전 대화를 주입. 연결 끊김도 일시정지로 처리 |
+| 추가 | AI 평가(PRD 12절 2차 후보): 끝난 면접의 대화 기록을 **평가 기준**(여러 세트, 기본값 하나, 항목 편집 가능)으로 OpenAI가 채점. 질문별 항목 점수(1~5)·코멘트·강점·개선점 + 면접 전체 총평. 모범답변 유사도는 보상하지 않도록 지시. 면접당 결과 하나(다시 평가하면 덮어씀), 기준은 스냅샷 |
 
 ## 로컬 실행
 
@@ -48,8 +50,8 @@ npm run dev
 | 상황 | 동작 |
 |------|------|
 | 정상 종료·시간 초과 | 클라이언트가 연결을 닫고 `PATCH status` → 서버가 `hangup`도 호출 |
-| 탭 정지·크래시로 클라이언트 타이머가 멈춤 | 최대 시간 + 2분이 지나면 cron/목록 조회가 `hangup` 후 `aborted` |
-| 새로고침으로 다시 연결 시도 | 이전 통화를 끊고 409 (재연결 미지원, R-10) |
+| 탭 정지·크래시로 클라이언트 타이머가 멈춤 | (누적 진행 시간 기준) 최대 시간 + 2분이 지나면 cron/목록 조회가 `hangup` 후 턴 기록으로 진행 시간을 추정해 `paused`(시간을 다 썼으면 `completed`, 대화가 없으면 `aborted`) |
+| 새로고침으로 다시 연결 시도 | 이전 통화를 끊고 409. 화면에서 일시정지로 정리한 뒤 [이어하기]로 새 통화를 연다 (R-10) |
 | 그래도 남는 위험 | OpenAI 프로젝트 월 예산 한도 |
 
 ## 질문 API (AI·스킬용)
@@ -72,8 +74,11 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 ```
 src/
   proxy.ts                     로그인 보호 (/api/v1/*, /api-docs, /llms.txt 제외)
-  db/schema.ts                 questions, prompts, interviews, interview_turns, api_tokens
-  server/                      서비스 계층 (UI·API 공용) — questions, prompts, interviews, api-tokens, realtime 세션 설정
+  db/schema.ts                 questions, prompts, interviews, interview_turns, api_tokens, evaluation_rubrics, interview_evaluations
+  server/                      서비스 계층 (UI·API 공용) — questions, prompts, interviews, api-tokens, realtime 세션 설정, rubrics, evaluations
+  server/evaluations.ts        OpenAI Responses API(JSON 스키마 고정)로 루브릭 평가 — 면접당 하나, 덮어쓰기
+  lib/evaluation.ts            답변을 질문별로 묶기, 평가 프롬프트·출력 스키마, 결과 정규화, 항목 평균, 루브릭 시드
+  lib/brand.ts                 서비스명·한 줄 설명 (사이드바 로고, 탭 제목, 로그인 화면이 여기서 읽음)
   lib/api-docs.ts              질문 API 설명서 원문 (/api-docs, /api/v1/docs, /llms.txt 공용)
   lib/realtime/turn-tracker.ts Realtime 이벤트 → 턴 조립 (녹음 기준 시계, 끊김 표시, 응답 지연)
   lib/realtime/interview-session.ts  WebRTC 연결·녹음·타이머·종료 처리
@@ -87,7 +92,7 @@ src/
 ## 검증
 
 ```bash
-npm test          # turn-tracker, review(복기 계산) 단위 테스트
+npm test          # turn-tracker, review(복기 계산), evaluation(답변 묶기·프롬프트·결과 정규화) 단위 테스트
 npm run typecheck
 npm run lint
 npm run build

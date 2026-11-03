@@ -9,30 +9,44 @@ import { formatDuration } from "@/lib/format";
 import {
   InterviewSession,
   type EndResult,
+  type ResumeState,
   type SessionSnapshot,
 } from "@/lib/realtime/interview-session";
-import { downloadLocalRecording, uploadRecording } from "@/lib/recorder/upload";
+import type { ResumeTurn } from "@/lib/realtime/resume-context";
+import { downloadLocalRecording, uploadPendingSegments } from "@/lib/recorder/upload";
 import { Markdown } from "@/components/markdown";
 
 const noop = () => () => {};
 
 type Question = { id: string; question: string; modelAnswer: string };
 
+/** 일시정지된 면접을 이어갈 때 서버가 내려주는 상태 */
+export type ResumeProps = {
+  activeMs: number;
+  questionIndex: number | null;
+  turns: ResumeTurn[];
+  pausedAt: string;
+};
+
 type Props = {
   interviewId: string;
   title: string;
   maxMinutes: number;
   questions: Question[];
+  /** 통화가 살아 있는 채로 다시 들어온 경우 (연결 끊김) */
   alreadyStarted: boolean;
+  /** 일시정지 상태면 이전 진행 상태, 아니면 null */
+  resume: ResumeProps | null;
 };
 
-export function LiveInterview({ interviewId, title, maxMinutes, questions, alreadyStarted }: Props) {
+export function LiveInterview({ interviewId, title, maxMinutes, questions, alreadyStarted, resume }: Props) {
   const router = useRouter();
   const supported = useSyncExternalStore(noop, isDesktopChrome, () => true);
   const sessionRef = useRef<InterviewSession | null>(null);
   const [snapshot, setSnapshot] = useState<SessionSnapshot | null>(null);
   const [result, setResult] = useState<EndResult | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [settling, setSettling] = useState(false);
   /** 모범답안 모달에 띄운 질문 번호 (0부터). null이면 닫힘 */
   const [answerIndex, setAnswerIndex] = useState<number | null>(null);
   const transcriptEnd = useRef<HTMLDivElement>(null);
@@ -55,27 +69,55 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
   }, [snapshot?.turns]);
 
   async function start() {
-    const session = new InterviewSession(interviewId, maxMinutes, questions, {
-      onChange: setSnapshot,
-      onEnded: (r) => {
-        setResult(r);
-        if (r.reason !== "disconnected" && r.reason !== "error" && r.upload.ok) router.push(`/interviews/${interviewId}`);
+    const resumeState: ResumeState | null = resume
+      ? {
+          activeMs: resume.activeMs,
+          questionIndex: resume.questionIndex,
+          turns: resume.turns,
+          pausedForMs: Math.max(0, Date.now() - new Date(resume.pausedAt).getTime()),
+        }
+      : null;
+    const session = new InterviewSession(
+      interviewId,
+      maxMinutes,
+      questions,
+      {
+        onChange: setSnapshot,
+        onEnded: (r) => {
+          setResult(r);
+          const stayHere = r.reason === "disconnected" || r.reason === "error" || !r.upload.ok;
+          if (!stayHere) router.push(`/interviews/${interviewId}`);
+        },
       },
-    });
+      resumeState,
+    );
     sessionRef.current = session;
     await session.start(loadAudioDevices()).catch(() => {});
   }
 
   async function retryUpload() {
     setUploading(true);
-    const upload = await uploadRecording(interviewId);
+    const upload = await uploadPendingSegments(interviewId);
     setUploading(false);
     setResult((prev) => (prev ? { ...prev, upload } : prev));
     if (upload.ok) router.push(`/interviews/${interviewId}`);
   }
 
-  const elapsed = snapshot?.elapsedMs ?? 0;
+  /** 연결이 끊긴 채 남은 면접을 서버에서 일시정지로 정리한다(진행 시간은 턴 기록으로 추정). */
+  async function settleAsPaused() {
+    setSettling(true);
+    await fetch(`/api/interviews/${interviewId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "paused" }),
+    }).catch(() => null);
+    router.refresh();
+    setSettling(false);
+  }
+
+  const elapsed = snapshot?.elapsedMs ?? resume?.activeMs ?? 0;
   const remaining = maxMinutes * 60_000 - elapsed;
+  const canPause = phase === "live" && !snapshot?.wrapUpSent;
   const hasSidebar = questions.length > 0;
   const currentIndex = snapshot?.currentQuestionIndex ?? null;
   const currentHasAnswer = currentIndex !== null && Boolean(questions[currentIndex]?.modelAnswer);
@@ -88,14 +130,18 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
     );
   }
 
-  // R-10: 연결이 끊긴 뒤 다시 들어온 경우 — 재연결 대신 정리하고 새 면접을 권한다.
+  // R-10: 통화가 살아 있는 채로 다시 들어온 경우(연결 끊김·새로고침) — 살아 있는 통화에 다시 붙을 수는 없으므로
+  // 일시정지로 정리한 뒤 이어하기를 권한다. 지금까지의 대화는 저장되어 있다.
   if (alreadyStarted && phase === "idle") {
     return (
-      <Notice title="이미 시작된 면접입니다">
-        <p>이전 연결이 끊긴 것 같습니다. 재연결은 지원하지 않습니다. 지금까지의 대화는 저장되어 있습니다.</p>
+      <Notice title="연결이 끊긴 면접입니다">
+        <p>이전 연결이 끊긴 것 같습니다. 지금까지의 대화는 저장되어 있습니다. 일시정지로 정리하면 이어서 진행할 수 있습니다.</p>
         <div className="mt-4 flex flex-wrap gap-2">
+          <button className="btn btn-primary" disabled={settling} onClick={settleAsPaused}>
+            {settling ? "정리 중…" : "일시정지로 정리하고 이어하기"}
+          </button>
           <button
-            className="btn btn-primary"
+            className="btn"
             onClick={async () => {
               await fetch(`/api/interviews/${interviewId}`, {
                 method: "PATCH",
@@ -107,7 +153,6 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
           >
             중단 처리하고 다시 보기
           </button>
-          <Link href={`/interviews?start=1&from=${interviewId}`} className="btn">같은 질문으로 새 면접</Link>
         </div>
       </Notice>
     );
@@ -115,11 +160,15 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
 
   if (result) {
     const disconnected = result.reason === "disconnected" || result.reason === "error";
+    const paused = result.status === "paused";
+    const title = disconnected ? "연결이 끊겼습니다" : paused ? "면접을 일시정지했습니다" : "면접이 끝났습니다";
     return (
-      <Notice title={disconnected ? "연결이 끊겼습니다" : "면접이 끝났습니다"}>
+      <Notice title={title}>
         {disconnected && snapshot?.error && <p className="mb-2 text-danger">{snapshot.error}</p>}
         <p>
-          {disconnected ? "지금까지의 대화와 녹음은 저장됩니다. " : ""}면접 길이 {formatDuration(result.durationMs)}.
+          {disconnected ? "지금까지의 대화와 녹음은 저장됩니다. " : ""}
+          {paused ? "언제든 목록이나 다시 보기에서 이어서 진행할 수 있습니다. " : ""}
+          진행 시간 {formatDuration(result.durationMs)}.
         </p>
         {result.metrics.latencyP95 !== null && (
           <p className="mt-1 text-xs text-muted">
@@ -140,8 +189,22 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
           </div>
         )}
         <div className="mt-4 flex flex-wrap gap-2">
-          <Link href={`/interviews/${interviewId}`} className="btn btn-primary">다시 보기로 이동</Link>
-          <Link href={`/interviews?start=1&from=${interviewId}`} className="btn">같은 질문으로 새 면접</Link>
+          {paused && (
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                // 서버 컴포넌트를 다시 받으면 resume 상태가 내려와 "이어하기" 화면이 된다.
+                sessionRef.current = null;
+                setResult(null);
+                setSnapshot(null);
+                router.refresh();
+              }}
+            >
+              이어하기
+            </button>
+          )}
+          <Link href={`/interviews/${interviewId}`} className={paused ? "btn" : "btn btn-primary"}>다시 보기로 이동</Link>
+          {!paused && <Link href={`/interviews?start=1&from=${interviewId}`} className="btn">같은 질문으로 새 면접</Link>}
         </div>
       </Notice>
     );
@@ -154,7 +217,7 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
           <h1 className="text-lg font-semibold">{title}</h1>
           <p className="text-sm text-muted">최대 {maxMinutes}분</p>
         </div>
-        {phase === "live" && (
+        {(phase === "live" || (phase === "idle" && resume)) && (
           <div className="flex items-center gap-3 tabular-nums">
             <span className="text-sm">{formatDuration(elapsed)}</span>
             <span className={`text-sm ${remaining <= 60_000 ? "font-semibold text-danger" : "text-muted"}`}>
@@ -165,7 +228,40 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
       </div>
 
       <div>
-        {phase === "idle" && (
+        {phase === "idle" && resume && (
+          <div className="card space-y-3 p-6 text-sm">
+            <p className="font-medium">일시정지된 면접입니다</p>
+            <ul className="list-disc space-y-1 pl-5 text-muted">
+              <li>
+                지금까지 {formatDuration(resume.activeMs)} 진행했고,{" "}
+                {questions.length > 0
+                  ? resume.questionIndex === null
+                    ? "아직 인사·자기소개 단계였습니다."
+                    : `질문 ${resume.questionIndex + 1}/${questions.length}번을 진행 중이었습니다.`
+                  : `대화 ${resume.turns.length}개가 저장되어 있습니다.`}
+              </li>
+              <li>이어하기를 누르면 면접관이 지금까지의 대화를 보고 이어서 진행합니다. 남은 시간은 {formatDuration(remaining)}입니다.</li>
+              <li>면접관이 말하는 동안은 마이크가 자동으로 꺼집니다. 말이 끝난 뒤 답하세요.</li>
+            </ul>
+            <button className="btn btn-primary w-full py-3 text-base" onClick={start}>이어하기</button>
+            <button
+              className="btn w-full"
+              onClick={async () => {
+                if (!confirm("이 면접을 여기서 끝낼까요? 지금까지의 기록은 남습니다.")) return;
+                await fetch(`/api/interviews/${interviewId}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ status: "completed", durationMs: resume.activeMs }),
+                });
+                router.push(`/interviews/${interviewId}`);
+              }}
+            >
+              여기서 끝내기
+            </button>
+          </div>
+        )}
+
+        {phase === "idle" && !resume && (
           <div className="card space-y-3 p-6 text-sm">
             <p className="font-medium">시작하기 전에</p>
             <ul className="list-disc space-y-1 pl-5 text-muted">
@@ -197,6 +293,20 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
             )}
             {snapshot?.error && <p className="mb-3 rounded-lg bg-danger/10 p-2 text-sm text-danger">{snapshot.error}</p>}
             <div className="card h-[50vh] overflow-y-auto p-4">
+              {resume && resume.turns.length > 0 && (
+                <ol className="mb-3 space-y-3 border-b border-border pb-3 opacity-60">
+                  {resume.turns.map((t, i) => (
+                    <li key={`prev-${i}`} className={t.role === "candidate" ? "flex justify-end" : ""}>
+                      <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${t.role === "candidate" ? "bg-primary/10" : "bg-surface-2"}`}>
+                        <p className="mb-0.5 text-[11px] text-muted">
+                          {t.role === "candidate" ? "나" : "면접관"} · 일시정지 전{t.interrupted && " · 끊김"}
+                        </p>
+                        <p className="whitespace-pre-wrap">{t.text}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
               {snapshot?.turns.length ? (
                 <ol className="space-y-3">
                   {snapshot.turns.map((t) => (
@@ -213,7 +323,7 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
                   ))}
                 </ol>
               ) : (
-                <p className="text-sm text-muted">대화가 여기에 표시됩니다.</p>
+                <p className="text-sm text-muted">{resume ? "이어지는 대화가 여기에 표시됩니다." : "대화가 여기에 표시됩니다."}</p>
               )}
               <div ref={transcriptEnd} />
             </div>
@@ -232,7 +342,17 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
                   현재 질문 모범답안
                 </button>
               )}
-              <button className="btn btn-danger ml-auto" disabled={!active}
+              <button
+                className="btn ml-auto"
+                disabled={!canPause}
+                title={snapshot?.wrapUpSent ? "마무리 단계에서는 일시정지할 수 없습니다" : "나중에 이어서 진행할 수 있습니다"}
+                onClick={() => {
+                  if (confirm("면접을 일시정지할까요? 나중에 이어서 진행할 수 있습니다.")) void sessionRef.current?.pause();
+                }}
+              >
+                일시정지
+              </button>
+              <button className="btn btn-danger" disabled={!active}
                 onClick={() => {
                   if (confirm("면접을 종료할까요?")) void sessionRef.current?.end("user");
                 }}>
@@ -253,7 +373,7 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
       </div>
 
       {hasSidebar && (
-        <aside className="self-start lg:sticky lg:top-20">
+        <aside className="self-start lg:sticky lg:top-6">
           <QuestionList
             questions={questions}
             current={currentIndex}

@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { BRAND } from "@/lib/brand";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "모의 면접",
-  description: "예상 질문 관리와 AI 음성 모의 면접",
+  title: { default: BRAND.name, template: `%s · ${BRAND.name}` },
+  description: `${BRAND.tagline} — 예상 질문 관리, 음성 면접, 녹음 복기, AI 평가`,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

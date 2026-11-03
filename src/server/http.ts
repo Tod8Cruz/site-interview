@@ -5,6 +5,7 @@ import { z } from "zod";
 import { formatZodError } from "@/lib/validation";
 import { findValidApiToken, touchApiToken } from "./api-tokens";
 import { ConflictError, NotFoundError } from "./interviews";
+import { OpenAIError } from "./openai";
 
 export function jsonError(status: number, code: string, message: string, extra?: Record<string, unknown>) {
   return NextResponse.json({ error: { code, message, ...extra } }, { status });
@@ -63,6 +64,7 @@ export function handleRouteError(error: unknown) {
   if (error instanceof z.ZodError) return jsonError(400, "validation_error", formatZodError(error));
   if (error instanceof BadRequestError) return jsonError(400, "bad_request", error.message);
   if (error instanceof NotFoundError) return jsonError(404, "not_found", error.message);
+  if (error instanceof OpenAIError) return jsonError(502, "openai_error", error.message);
   if (error instanceof ConflictError) {
     return jsonError(409, "conflict", error.message, { interviewId: error.interviewId });
   }

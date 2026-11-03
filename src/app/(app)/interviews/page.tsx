@@ -12,9 +12,12 @@ import { StartInterview, type StartPrefill } from "./start-interview";
 
 const statusTone = {
   in_progress: "bg-warning/15 text-warning",
+  paused: "bg-primary/15 text-primary",
   completed: "bg-success/15 text-success",
   aborted: "bg-danger/15 text-danger",
 } as const;
+
+const isOpen = (status: keyof typeof statusTone) => status === "in_progress" || status === "paused";
 
 async function loadPrefill(from: string | null, notedOnly: boolean): Promise<StartPrefill | null> {
   if (!from) return null;
@@ -69,18 +72,28 @@ export default async function InterviewsPage(props: PageProps<"/interviews">) {
           {interviews.map((iv) => (
             <li key={iv.id} className="card flex flex-wrap items-center gap-x-4 gap-y-2 p-4">
               <Link
-                href={iv.status === "in_progress" ? `/interviews/${iv.id}/live` : `/interviews/${iv.id}`}
+                href={isOpen(iv.status) ? `/interviews/${iv.id}/live` : `/interviews/${iv.id}`}
                 className="min-w-0 flex-1 basis-60"
               >
                 <p className="truncate font-medium hover:underline">{iv.title}</p>
                 <p className="mt-0.5 text-xs text-muted">
                   {formatDateTime(iv.startedAt)} · {iv.promptName} · 질문 {iv.questionCount}개
+                  {iv.status === "paused" && iv.questionCount > 0 && (
+                    <> · {iv.currentQuestionIndex === null ? "인사 단계" : `${iv.currentQuestionIndex + 1}번 진행 중`}</>
+                  )}
                 </p>
               </Link>
               <div className="flex items-center gap-1.5 text-xs">
-                <span className="tabular-nums text-muted">{formatDuration(iv.durationMs)}</span>
+                <span className="tabular-nums text-muted">
+                  {formatDuration(iv.durationMs)}
+                  {iv.status === "paused" && ` / ${iv.maxMinutes}:00`}
+                </span>
                 <span className={`chip ${statusTone[iv.status]}`}>{STATUS_LABEL[iv.status]}</span>
-                {iv.status !== "in_progress" && <span className="chip">{AUDIO_LABEL[iv.audioStatus]}</span>}
+                {iv.status === "paused" && (
+                  <Link href={`/interviews/${iv.id}/live`} className="btn btn-sm btn-primary">이어하기</Link>
+                )}
+                {!isOpen(iv.status) && <span className="chip">{AUDIO_LABEL[iv.audioStatus]}</span>}
+                {iv.evaluated && <span className="chip bg-success/15 text-success">평가됨</span>}
                 <DeleteInterviewButton id={iv.id} />
               </div>
             </li>

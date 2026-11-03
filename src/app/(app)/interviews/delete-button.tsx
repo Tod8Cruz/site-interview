@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
-import { deleteRecording } from "@/lib/recorder/chunk-store";
+import { deleteInterviewRecordings } from "@/lib/recorder/chunk-store";
 
 export function DeleteInterviewButton({ id, redirectTo }: { id: string; redirectTo?: string }) {
   const router = useRouter();
@@ -19,7 +19,7 @@ export function DeleteInterviewButton({ id, redirectTo }: { id: string; redirect
             alert("삭제하지 못했습니다.");
             return;
           }
-          await deleteRecording(id).catch(() => {});
+          await deleteInterviewRecordings(id).catch(() => {});
           if (redirectTo) router.push(redirectTo);
           router.refresh();
         });

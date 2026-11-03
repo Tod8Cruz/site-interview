@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { QuestionTracker, questionProtocol, startQuestionTool } from "./question-protocol";
+import { needsFollowUpResponse, QuestionTracker, questionProtocol, resumeProtocol, startQuestionTool } from "./question-protocol";
 
 const questions = [
   { id: "q1", question: "지원동기를 말씀해 주세요." },
@@ -82,4 +82,37 @@ test("같은 call_id는 한 번만 처리한다", () => {
   const t = new QuestionTracker(questions);
   assert.equal(t.handle(call("c1", { index: 1 })).length, 1);
   assert.equal(t.handle(call("c1", { index: 1 })).length, 0);
+});
+
+test("재개: 시드한 번호 뒤로는 못 가고 같은 번호는 멱등, 다음 번호는 허용", () => {
+  const t = new QuestionTracker(questions, 1);
+  assert.equal(t.currentId, "q2");
+  assert.deepEqual(parse(t.handle(call("c1", { index: 1 }))[0]), {
+    ok: false,
+    error: "questions must be asked in order; cannot go back",
+    expected: 3,
+  });
+  assert.equal(parse(t.handle(call("c2", { index: 2 }))[0]).ok, true);
+  assert.equal(t.current, 1);
+  assert.equal(parse(t.handle(call("c3", { index: 3 }))[0]).ok, true);
+  assert.equal(t.current, 2);
+});
+
+test("재개 프로토콜 문구", () => {
+  assert.match(resumeProtocol(1, 3), /2번까지 시작/);
+  assert.match(resumeProtocol(1, 3), /3번부터/);
+  assert.match(resumeProtocol(2, 3), /3번부터/);
+  assert.match(resumeProtocol(null, 3), /1번부터 start_question/);
+  assert.doesNotMatch(resumeProtocol(null, 0), /질문 목록/);
+});
+
+test("needsFollowUpResponse: 도구 호출로 끝난 응답만 새 응답을 요청한다", () => {
+  const callItem = { type: "function_call", name: "start_question" };
+  const speech = { type: "message" };
+  assert.equal(needsFollowUpResponse([callItem]), true);
+  // 재개 직후 "잠시만요"라고 말하고 호출만 한 경우: 질문을 아직 안 했다
+  assert.equal(needsFollowUpResponse([speech, callItem]), true);
+  assert.equal(needsFollowUpResponse([callItem, speech]), false);
+  assert.equal(needsFollowUpResponse([speech]), false);
+  assert.equal(needsFollowUpResponse([{ type: "function_call", name: "other" }]), false);
 });

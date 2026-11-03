@@ -40,7 +40,36 @@ export function questionProtocol(count: number) {
 - 도구가 오류를 돌려주면 그 안의 expected 번호로 다시 호출하세요.`;
 }
 
+/**
+ * 재개한 통화의 세션 지시문 뒤에 붙이는 문구. 대화 기록은 클라이언트가 대화 항목으로 넣고(resume-context),
+ * 여기서는 "처음부터 다시 하지 말라"는 규칙을 지시문 수준에서 못 박는다.
+ */
+export function resumeProtocol(currentIndex: number | null, count: number) {
+  const progress =
+    count <= 0
+      ? ""
+      : currentIndex === null
+        ? `\n- 질문 목록의 질문은 아직 시작하지 않았으니 1번부터 ${START_QUESTION_TOOL}을 호출해 진행하세요.`
+        : `\n- 질문 목록 ${currentIndex + 1}번까지 시작했습니다. 1번부터 다시 시작하지 마세요. ${currentIndex + 1}번 답변이 끝나지 않았으면 이어서 듣고, 끝났으면 ${Math.min(count, currentIndex + 2)}번부터 ${START_QUESTION_TOOL}을 호출해 진행하세요.`;
+  return `
+
+[재개 프로토콜 — 위의 지시보다 우선합니다]
+- 이 면접은 일시정지 후 재개된 것입니다. 지금까지의 대화는 대화 기록에 들어 있습니다.
+- 인사와 자기소개 요청을 반복하지 말고, 이어서 진행하겠다고 짧게 말한 뒤 계속하세요.
+- "질문을 준비하겠습니다", "잠시만요"처럼 기다리게 하는 말은 하지 말고 바로 질문하세요.${progress}`;
+}
+
 export type StartQuestionReply = { callId: string; output: string };
+
+/**
+ * start_question에 답한 뒤 새 응답을 요청해야 하는지. 도구 호출 뒤에 음성(message)이 이어졌으면 질문은 이미 했으므로
+ * 다음 응답은 VAD가 만든다. 음성이 호출 앞에만 있으면("잠시만요" 같은 예고) 질문을 아직 안 했으니 요청해야 멈추지 않는다.
+ */
+export function needsFollowUpResponse(output: { type?: string; name?: string }[]) {
+  const lastCall = output.findLastIndex((item) => item.type === "function_call" && item.name === START_QUESTION_TOOL);
+  if (lastCall < 0) return false;
+  return !output.slice(lastCall + 1).some((item) => item.type === "message");
+}
 
 type FunctionCallItem = { type?: string; name?: string; call_id?: string; arguments?: string };
 
@@ -51,13 +80,23 @@ type FunctionCallItem = { type?: string; name?: string; call_id?: string; argume
  */
 export class QuestionTracker {
   /** 0부터 시작. null이면 아직 인사·자기소개 단계 */
-  current: number | null = null;
+  current: number | null;
   private seen = new Set<string>();
 
-  constructor(private readonly questions: ProtocolQuestion[]) {}
+  /** initial: 재개할 때 일시정지 시점의 질문 번호(0부터)를 넣는다. */
+  constructor(
+    private readonly questions: ProtocolQuestion[],
+    initial: number | null = null,
+  ) {
+    this.current = initial;
+  }
 
   get currentId() {
     return this.current === null ? null : (this.questions[this.current]?.id ?? null);
+  }
+
+  get count() {
+    return this.questions.length;
   }
 
   handle(event: ServerEvent): StartQuestionReply[] {
