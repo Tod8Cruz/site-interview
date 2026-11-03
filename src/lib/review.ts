@@ -42,14 +42,22 @@ export function similarity(a: string, b: string) {
 const MIN_SIMILARITY = 0.15;
 
 /**
- * L-14 기본값: 면접 중 기록된 질문이 있으면 그것, 없으면 이 턴 직전(이 턴 포함) 면접관 발화와 가장 비슷한 예상 질문.
+ * 연속된 지원자 발화는 첫 조각의 질문을 따른다. 그 외에는 기록된 질문, 직전 면접관 발화 유사도 순.
  */
 export function suggestQuestion(turns: ReviewTurn[], index: number, questions: ReviewQuestion[]) {
   if (!questions.length) return null;
+  if (turns[index].role === "candidate") {
+    // 재귀 없이 연속된 답변의 첫 유효 조각을 찾는다. 빈 전사는 답변의 근거로 쓰지 않는다.
+    for (let i = index - 1; i >= 0; i--) {
+      if (!turns[i].text.trim()) continue;
+      if (turns[i].role === "interviewer") break;
+      index = i;
+    }
+  }
   const known = new Set(questions.map((q) => q.id));
   let asked: ReviewTurn | undefined;
   for (let i = index; i >= 0; i--) {
-    if (turns[i].role === "interviewer") {
+    if (turns[i].role === "interviewer" && turns[i].text.trim()) {
       asked = turns[i];
       break;
     }

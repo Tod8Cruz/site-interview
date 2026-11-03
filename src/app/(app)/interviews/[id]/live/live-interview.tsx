@@ -161,7 +161,7 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
   if (result) {
     const disconnected = result.reason === "disconnected" || result.reason === "error";
     const paused = result.status === "paused";
-    const title = disconnected ? "연결이 끊겼습니다" : paused ? "면접을 일시정지했습니다" : "면접이 끝났습니다";
+    const title = result.reason === "error" && paused ? "면접을 일시정지했습니다" : disconnected ? "연결이 끊겼습니다" : paused ? "면접을 일시정지했습니다" : "면접이 끝났습니다";
     return (
       <Notice title={title}>
         {disconnected && snapshot?.error && <p className="mb-2 text-danger">{snapshot.error}</p>}
@@ -241,7 +241,7 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
                   : `대화 ${resume.turns.length}개가 저장되어 있습니다.`}
               </li>
               <li>이어하기를 누르면 면접관이 지금까지의 대화를 보고 이어서 진행합니다. 남은 시간은 {formatDuration(remaining)}입니다.</li>
-              <li>면접관이 말하는 동안은 마이크가 자동으로 꺼집니다. 말이 끝난 뒤 답하세요.</li>
+              <li>면접관이 응답을 준비하거나 말하는 동안은 마이크가 자동으로 꺼집니다. 마이크가 다시 켜진 뒤 답하세요.</li>
             </ul>
             <button className="btn btn-primary w-full py-3 text-base" onClick={start}>이어하기</button>
             <button
@@ -268,7 +268,7 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
               <li>조용한 곳에서 이어폰을 쓰면 가장 깨끗하게 녹음됩니다.</li>
               <li>시작하면 마이크 권한을 묻습니다. 허용해 주세요.</li>
               <li>면접관이 먼저 인사합니다. 생각할 때 잠시 멈춰도 괜찮습니다.</li>
-            <li>면접관이 말하는 동안은 마이크가 자동으로 꺼집니다. 말이 끝난 뒤 답하세요.</li>
+              <li>면접관이 응답을 준비하거나 말하는 동안은 마이크가 자동으로 꺼집니다. 마이크가 다시 켜진 뒤 답하세요.</li>
               <li>음성 인식은 &ldquo;어, 음&rdquo; 같은 군말을 지울 수 있습니다. 말버릇은 녹음으로 확인하세요.</li>
             </ul>
             <button className="btn btn-primary w-full py-3 text-base" onClick={start}>면접 시작</button>
@@ -280,11 +280,12 @@ export function LiveInterview({ interviewId, title, maxMinutes, questions, alrea
             <div className="mb-4 grid grid-cols-2 gap-3">
               <Speaker label="면접관" active={Boolean(snapshot?.interviewerSpeaking)} />
               <Speaker
-              label="나"
-              active={Boolean(snapshot?.candidateSpeaking)}
-              muted={snapshot?.muted}
-              gated={phase === "live" && !snapshot?.muted && !snapshot?.micOpen}
-            />
+                label="나"
+                active={Boolean(snapshot?.candidateSpeaking)}
+                muted={snapshot?.muted}
+                gated={phase === "live" && !snapshot?.muted && !snapshot?.micOpen}
+                preparing={Boolean(snapshot?.awaitingResponse && !snapshot?.interviewerSpeaking)}
+              />
             </div>
             {phase === "connecting" && <p className="mb-3 text-sm text-muted">연결 중…</p>}
             {phase === "ending" && <p className="mb-3 text-sm text-muted">면접을 마무리하고 녹음을 저장하는 중…</p>}
@@ -541,19 +542,21 @@ function Speaker({
   active,
   muted,
   gated,
+  preparing,
 }: {
   label: string;
   active: boolean;
   muted?: boolean;
-  /** 면접관이 말하는 동안 자동으로 닫힌 상태 */
+  /** 면접관 응답 준비·발언 중 자동으로 닫힌 상태 */
   gated?: boolean;
+  preparing?: boolean;
 }) {
   return (
     <div className={`card flex items-center gap-2 p-3 transition-colors ${active ? "border-primary" : ""}`}>
       <span className={`size-2.5 rounded-full ${active ? "animate-pulse bg-primary" : gated ? "bg-warning" : "bg-border"}`} />
       <span className="text-sm font-medium">{label}</span>
       <span className="ml-auto text-xs text-muted">
-        {muted ? "음소거" : active ? "말하는 중" : gated ? "면접관 발언 중 · 마이크 꺼짐" : ""}
+        {muted ? "음소거" : gated ? preparing ? "면접관 응답 준비 중 · 마이크 꺼짐" : "면접관 발언 중 · 마이크 꺼짐" : active ? "말하는 중" : ""}
       </span>
     </div>
   );

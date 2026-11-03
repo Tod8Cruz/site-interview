@@ -63,7 +63,7 @@ export type StartQuestionReply = { callId: string; output: string };
 
 /**
  * start_question에 답한 뒤 새 응답을 요청해야 하는지. 도구 호출 뒤에 음성(message)이 이어졌으면 질문은 이미 했으므로
- * 다음 응답은 VAD가 만든다. 음성이 호출 앞에만 있으면("잠시만요" 같은 예고) 질문을 아직 안 했으니 요청해야 멈추지 않는다.
+ * 다음 응답은 지원자의 답변 뒤 응답 게이트가 만든다. 음성이 호출 앞에만 있으면("잠시만요" 같은 예고) 질문을 아직 안 했으니 요청해야 멈추지 않는다.
  */
 export function needsFollowUpResponse(output: { type?: string; name?: string }[]) {
   const lastCall = output.findLastIndex((item) => item.type === "function_call" && item.name === START_QUESTION_TOOL);

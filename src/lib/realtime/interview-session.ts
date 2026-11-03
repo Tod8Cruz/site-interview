@@ -3,6 +3,7 @@ import { MixedRecorder } from "@/lib/recorder/mixed-recorder";
 import { uploadSegment, type UploadResult } from "@/lib/recorder/upload";
 import { needsFollowUpResponse, QuestionTracker, type ProtocolQuestion } from "./question-protocol";
 import { buildResumeItems, type ResumeTurn } from "./resume-context";
+import { RESPONSE_DELAY_MS, ResponseGate } from "./response-gate";
 import { TurnTracker, type FinalTurn, type LiveTurn, type ServerEvent } from "./turn-tracker";
 
 export type EndReason = "user" | "timeout" | "pause" | "disconnected" | "error";
@@ -25,9 +26,10 @@ export type SessionSnapshot = {
   turns: LiveTurn[];
   candidateSpeaking: boolean;
   interviewerSpeaking: boolean;
+  awaitingResponse: boolean;
   /** 사용자가 직접 끈 음소거 */
   muted: boolean;
-  /** 실제로 마이크 소리가 나가는 중인지. 반이중: 면접관이 말하는 동안은 자동으로 닫힌다. */
+  /** 실제로 마이크 소리가 나가는 중인지. 응답 요청부터 재생 종료까지 자동으로 닫힌다. */
   micOpen: boolean;
   wrapUpSent: boolean;
   /** 진행 중인 예상 질문 (0부터). null이면 아직 인사·자기소개 단계 */
@@ -40,6 +42,9 @@ export type SessionMetrics = {
   latencyP50: number | null;
   latencyP95: number | null;
   latencySamples: number;
+  responseDelayMs: number;
+  lateSpeechCount: number;
+  requestFailureCount: number;
   /** response.done / 전사 완료 이벤트의 usage 합계 (비용 실측용) */
   usage: Record<string, number>;
 };
@@ -99,12 +104,14 @@ export class InterviewSession {
   private usage: Record<string, number> = {};
   private readonly tracker: TurnTracker;
   private readonly questions: QuestionTracker;
+  private readonly gate: ResponseGate;
   private state: SessionSnapshot = {
     phase: "idle",
     elapsedMs: 0,
     turns: [],
     candidateSpeaking: false,
     interviewerSpeaking: false,
+    awaitingResponse: false,
     muted: false,
     micOpen: false,
     wrapUpSent: false,
@@ -130,6 +137,14 @@ export class InterviewSession {
       { onFinal: (turn) => this.postTurn(turn), onChange: () => this.sync() },
       () => this.questions.currentId,
     );
+    this.gate = new ResponseGate({
+      delayMs: RESPONSE_DELAY_MS,
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      send: (event) => this.send(event),
+      onChange: () => this.sync(),
+      onFailure: (message) => this.failResponse(message),
+    });
   }
 
   /** 누적 진행 시계 (ms). 이전 구간의 진행 시간에 이번 구간의 녹음 시계를 더한다. */
@@ -152,6 +167,7 @@ export class InterviewSession {
     this.update({ phase: "connecting", error: null });
     try {
       this.mic = await openMicrophone(devices.inputId);
+      this.applyMicGate(); // 연결 중에는 인사 전 발화를 서버로 보내지 않는다.
       this.context = new AudioContext();
       await this.context.resume();
 
@@ -179,6 +195,7 @@ export class InterviewSession {
       this.channel = channel;
       channel.onmessage = (message) => this.onServerEvent(message.data);
       channel.onopen = () => {
+        if (this.state.phase !== "connecting") return;
         // 재개: 이전 대화를 먼저 넣어야 첫 응답이 이어가는 말이 된다. 데이터 채널은 순서가 보장된다.
         if (this.resume?.turns.length) {
           const items = buildResumeItems(this.resume.turns, {
@@ -186,11 +203,16 @@ export class InterviewSession {
             questionCount: this.questionCount,
             pausedForMs: this.resume.pausedForMs,
           });
-          for (const item of items) this.send(item);
+          for (const item of items) {
+            if (!this.send(item)) {
+              this.failResponse("이전 대화를 전송하지 못했습니다. 이어하기를 다시 시도해 주세요.");
+              return;
+            }
+          }
         }
         this.update({ phase: "live" });
-        this.applyMicGate();
-        this.send({ type: "response.create" }); // R-2: 면접관이 먼저 인사(재개면 이어가겠다는 말)
+        this.gate.request(); // R-2: 인사·재개도 전송 전에 마이크를 닫는다.
+        if (this.snapshot.phase !== "live") return;
         this.timer = setInterval(() => this.tick(), 250);
       };
       channel.onclose = () => {
@@ -238,11 +260,11 @@ export class InterviewSession {
   }
 
   /**
-   * 반이중 통화: 면접관이 말하는 동안은 마이크를 닫아 끼어들기와 스피커 되울림이 발화로 잡히지 않게 한다.
+   * 반이중 통화: 면접관 응답을 요청한 시점부터 재생 종료까지 마이크를 닫는다.
    * 트랙을 끄면 WebRTC는 무음을 보내고, 녹음에도 무음이 남는다.
    */
   private applyMicGate() {
-    const open = !this.state.muted && !this.tracker.interviewerSpeaking;
+    const open = this.state.phase === "live" && !this.state.muted && !this.tracker.interviewerSpeaking && !this.gate.awaitingResponse;
     for (const track of this.mic?.getAudioTracks() ?? []) track.enabled = open;
     if (open !== this.state.micOpen) this.update({ micOpen: open });
   }
@@ -254,17 +276,18 @@ export class InterviewSession {
 
   private async finish(reason: EndReason): Promise<EndResult> {
     this.update({ phase: "ending" });
+    this.gate.dispose();
+    this.applyMicGate();
     if (this.timer) clearInterval(this.timer);
     if (this.disconnectTimer) clearTimeout(this.disconnectTimer);
 
     const durationMs = this.now();
     const segmentMs = this.segmentMs();
     this.tracker.flush();
-
-    const recording = this.recorder ? await this.recorder.stop(segmentMs).catch(() => null) : null;
-
+    // 종료 중에 도구 호출이나 새 응답이 이어지지 않게 통신부터 닫는다.
     this.channel?.close();
     this.pc?.close();
+    const recording = this.recorder ? await this.recorder.stop(segmentMs).catch(() => null) : null;
     for (const track of this.mic?.getTracks() ?? []) track.stop();
     if (this.audioElement) this.audioElement.srcObject = null;
     await this.context?.close().catch(() => {});
@@ -300,6 +323,9 @@ export class InterviewSession {
       latencyP50: percentile(latencies, 50),
       latencyP95: percentile(latencies, 95),
       latencySamples: latencies.length,
+      responseDelayMs: RESPONSE_DELAY_MS,
+      lateSpeechCount: this.gate.lateSpeechCount,
+      requestFailureCount: this.gate.requestFailureCount,
       usage: this.usage,
     };
     console.info("[interview metrics]", metrics);
@@ -323,6 +349,7 @@ export class InterviewSession {
   }
 
   private onServerEvent(raw: unknown) {
+    if (this.state.phase !== "live") return;
     let event: ServerEvent;
     try {
       event = JSON.parse(String(raw)) as ServerEvent;
@@ -330,43 +357,48 @@ export class InterviewSession {
       return;
     }
     if (event.type === "error") {
+      this.gate.handle(event);
+      if (this.state.phase !== "live") return;
       const error = event.error as { code?: string; message?: string } | undefined;
-      // 도구 응답 뒤의 response.create가 VAD가 이미 만든 응답과 겹친 경우. 도구 출력은 대화에 남아 그 응답에 반영된다.
-      if (error?.code === "conversation_already_has_active_response") {
-        console.warn("Realtime: 응답이 이미 진행 중", event);
-        return;
-      }
       console.error("Realtime error", event);
       this.update({ error: error?.message ?? "Realtime 오류" });
       return;
     }
+    let followUp = false;
     if (event.type === "response.done") {
       addUsage(this.usage, (event.response as { usage?: unknown } | undefined)?.usage, "response");
-      this.handleQuestionCalls(event);
+      const status = (event.response as { status?: string } | undefined)?.status;
+      if (status === "completed") followUp = this.handleQuestionCalls(event);
     } else if (event.type === "conversation.item.input_audio_transcription.completed") {
       addUsage(this.usage, event.usage, "transcription");
     }
+    if (this.state.phase !== "live") return;
     this.tracker.handle(event);
     // R-8: 지원자가 말하는 중이었다면 답변이 끝난 뒤에 마무리 지시를 보낸다.
     if (event.type === "input_audio_buffer.speech_stopped" && this.wrapUpPending) this.sendWrapUp();
+    this.gate.handle(event, followUp);
   }
 
   /** start_question 도구 호출에 답하고 사이드바 상태를 올린다. 턴 스탬프가 이 값을 쓰므로 tracker.handle보다 먼저 부른다. */
   private handleQuestionCalls(event: ServerEvent) {
     const replies = this.questions.handle(event);
     for (const reply of replies) {
-      this.send({
+      const sent = this.send({
         type: "conversation.item.create",
         item: { type: "function_call_output", call_id: reply.callId, output: reply.output },
       });
+      if (!sent) {
+        this.failResponse("질문 전환을 전송하지 못했습니다. 이어하기로 다시 진행해 주세요.");
+        return false;
+      }
     }
-    // 도구 호출 뒤에 질문을 말했으면 다음 응답은 VAD가 만들므로 생략해 왕복 지연을 피한다.
+    // 도구 호출 뒤에 질문을 말했으면 지원자의 다음 답변 뒤 유예 게이트가 응답을 만든다.
     // 호출로 끝난 응답이면(앞에 "잠시만요" 같은 말만 있어도) 아무도 질문하지 않아 멈추므로 새 응답을 요청한다.
     const output = (event.response as { output?: { type?: string; name?: string }[] } | undefined)?.output ?? [];
-    if (replies.length && needsFollowUpResponse(output)) this.send({ type: "response.create" });
     if (this.questions.current !== this.state.currentQuestionIndex) {
       this.update({ currentQuestionIndex: this.questions.current });
     }
+    return replies.length > 0 && needsFollowUpResponse(output);
   }
 
   private tick() {
@@ -385,15 +417,30 @@ export class InterviewSession {
 
   private sendWrapUp() {
     this.wrapUpPending = false;
-    this.send({
+    const sent = this.send({
       type: "conversation.item.create",
       item: { type: "message", role: "system", content: [{ type: "input_text", text: WRAP_UP_INSTRUCTION }] },
     });
+    if (!sent) {
+      this.failResponse("마무리 안내를 전송하지 못했습니다. 이어하기로 다시 진행해 주세요.");
+      return;
+    }
     this.update({ wrapUpSent: true });
   }
 
   private send(event: Record<string, unknown>) {
-    if (this.channel?.readyState === "open") this.channel.send(JSON.stringify(event));
+    if (this.channel?.readyState !== "open") return false;
+    try {
+      this.channel.send(JSON.stringify(event));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private failResponse(message: string) {
+    this.update({ error: message });
+    void this.end("error");
   }
 
   private postTurn(turn: FinalTurn) {
@@ -422,6 +469,7 @@ export class InterviewSession {
       turns: this.tracker.liveTurns(),
       candidateSpeaking: this.tracker.candidateSpeaking,
       interviewerSpeaking: this.tracker.interviewerSpeaking,
+      awaitingResponse: this.gate.awaitingResponse,
     });
     this.applyMicGate();
   }

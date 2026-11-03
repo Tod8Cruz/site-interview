@@ -15,14 +15,14 @@ function turnDetection(snapshot: Interview["turnDetection"]) {
       threshold: 0.5,
       prefix_padding_ms: 300,
       silence_duration_ms: snapshot.silenceMs,
-      create_response: true,
+      create_response: false, // 클라이언트가 VAD 종료 후 유예를 두고 response.create를 보낸다.
       interrupt_response: false, // 반이중: 면접관이 말하는 동안 클라이언트가 마이크를 닫는다
     };
   }
   return {
     type: "semantic_vad",
     eagerness: snapshot.eagerness,
-    create_response: true,
+    create_response: false, // 의미 기반 VAD도 응답 생성은 클라이언트가 결정한다.
     interrupt_response: false, // 반이중: 면접관이 말하는 동안 클라이언트가 마이크를 닫는다
   };
 }

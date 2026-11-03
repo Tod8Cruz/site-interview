@@ -142,20 +142,25 @@ export class TurnTracker {
         r.endMs = this.now();
         r.audioDone = true;
         if (event.type === "output_audio_buffer.cleared") r.interrupted = true;
-        this.interviewerSpeaking = false;
+        this.interviewerSpeaking = [...this.interviewers.values()].some((turn) => turn.audioStarted && !turn.audioDone);
         this.maybeEmitInterviewer(r);
         break;
       }
       case "response.done": {
-        const response = (event.response ?? {}) as { id?: string; status?: string };
+        const response = (event.response ?? {}) as {
+          id?: string;
+          status?: string;
+          output?: { content?: { type?: string }[] }[];
+        };
         if (!response.id) break;
         const r = this.interviewer(response.id);
         if (response.status === "cancelled") r.interrupted = true;
         // 세션이 같은 응답의 start_question 호출을 먼저 처리하므로, 이 시점 값이 "이 응답이 꺼낸 질문"이다.
         r.questionId = this.questionId();
         r.transcriptDone = true;
-        // 오디오 재생이 시작되지 않았다면 이후에도 시작되지 않는다.
-        if (!r.audioStarted) r.audioDone = true;
+        // 생성 완료가 재생 시작보다 먼저 도착할 수 있다. 실제 audio content도 확인한다.
+        const hasAudio = response.output?.some((item) => item.content?.some((part) => part.type === "audio"));
+        if (!r.audioStarted && !hasAudio) r.audioDone = true;
         this.maybeEmitInterviewer(r);
         break;
       }
@@ -256,7 +261,7 @@ export class TurnTracker {
       endMs: Math.max(c.startMs, c.endMs),
       itemId: c.itemId === "unknown" ? null : c.itemId,
       interrupted: false,
-      questionId: c.questionId ?? this.questionId(),
+      questionId: c.questionId === undefined ? this.questionId() : c.questionId,
     });
   }
 
@@ -272,7 +277,7 @@ export class TurnTracker {
       endMs: Math.max(startMs, r.endMs ?? this.now()),
       itemId: r.itemId ?? null,
       interrupted: r.interrupted,
-      questionId: r.questionId ?? this.questionId(),
+      questionId: r.questionId === undefined ? this.questionId() : r.questionId,
     });
   }
 }

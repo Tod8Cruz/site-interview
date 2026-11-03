@@ -70,6 +70,21 @@ test("groupAnswers: 첫 질문 전 답변(자기소개)은 기타로 묶는다",
   assert.equal(groups[1].key, "q1");
 });
 
+test("groupAnswers: 잘못된 질문 번호가 있는 답변 조각도 첫 조각과 합친다", () => {
+  const turns = [
+    turn({ role: "interviewer", startMs: 0, text: "지원동기는?", questionId: "q1" }),
+    turn({ role: "candidate", startMs: 1000, text: "교사가 되고 싶은 이유는", questionId: "q1" }),
+    turn({ role: "candidate", startMs: 2000, text: "함께 성장하고 싶어서입니다", questionId: "q2" }),
+    turn({ role: "interviewer", startMs: 3000, text: "갈등 해결 경험은?", questionId: "q2" }),
+    turn({ role: "candidate", startMs: 4000, text: "동아리에서", questionId: "q2" }),
+  ];
+  const groups = groupAnswers(turns, questions);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups[0].turnIds, ["candidate-1000", "candidate-2000"]);
+  assert.equal(groups[0].answerText, "교사가 되고 싶은 이유는\n함께 성장하고 싶어서입니다");
+  assert.deepEqual(groups[1].turnIds, ["candidate-4000"]);
+});
+
 test("groupAnswers: 꼬리질문 답변은 직전 질문 묶음에 이어 붙는다", () => {
   const turns = [
     turn({ role: "interviewer", startMs: 0, text: "지원동기를 말씀해 주세요.", questionId: "q1" }),

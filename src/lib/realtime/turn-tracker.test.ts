@@ -35,6 +35,19 @@ test("면접관 턴은 오디오가 실제로 재생된 구간을 시각으로 �
   ]);
 });
 
+test("음성 시작보다 생성 완료가 먼저 와도 재생 구간과 인사 단계 질문을 유지한다", () => {
+  const { at, finals, state } = setup();
+  at(100, { type: "response.output_audio_transcript.delta", response_id: "r1", item_id: "i1", delta: "안녕하세요" });
+  at(200, { type: "response.done", response: {
+    id: "r1", status: "completed", output: [{ content: [{ type: "audio" }] }],
+  } });
+  assert.equal(finals.length, 0);
+  at(300, { type: "output_audio_buffer.started", response_id: "r1" });
+  state.questionId = "q1";
+  at(400, { type: "output_audio_buffer.stopped", response_id: "r1" });
+  assert.deepEqual([finals[0].startMs, finals[0].endMs, finals[0].questionId], [300, 400, null]);
+});
+
 test("지원자 전사가 늦게 도착해도 발화 시작 시각을 유지한다", () => {
   const { at, finals } = setup();
   at(5000, { type: "input_audio_buffer.speech_started", item_id: "u1" });
@@ -122,6 +135,25 @@ test("지원자 턴은 말을 시작한 시점의 질문을 유지한다", () =>
   state.questionId = "q2"; // 전사가 끝나기 전에 면접관이 다음 질문으로 넘어감
   at(4500, { type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: "네" });
   assert.equal(finals[0].questionId, "q1");
+});
+
+test("자기소개에서 시작한 턴은 전사가 늦어도 null 질문을 유지한다", () => {
+  const { at, finals, state } = setup();
+  at(1000, { type: "input_audio_buffer.speech_started", item_id: "intro" });
+  at(2000, { type: "input_audio_buffer.speech_stopped", item_id: "intro" });
+  state.questionId = "q1";
+  at(3000, { type: "conversation.item.input_audio_transcription.completed", item_id: "intro", transcript: "자기소개" });
+  assert.equal(finals[0].questionId, null);
+});
+
+test("이전 응답의 재생 종료는 후속 응답의 발언 표시를 끄지 않는다", () => {
+  const { at, tracker } = setup();
+  at(0, { type: "output_audio_buffer.started", response_id: "r1" });
+  at(100, { type: "output_audio_buffer.started", response_id: "r2" });
+  at(200, { type: "output_audio_buffer.stopped", response_id: "r1" });
+  assert.equal(tracker.interviewerSpeaking, true);
+  at(300, { type: "output_audio_buffer.stopped", response_id: "r2" });
+  assert.equal(tracker.interviewerSpeaking, false);
 });
 
 test("면접관 턴은 response.done 시점의 질문을 쓴다", () => {
