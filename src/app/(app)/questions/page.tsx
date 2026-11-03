@@ -1,18 +1,20 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { PageHeader } from "@/components/page-header";
+import { requireUser } from "@/server/auth";
 import { listCategories, listQuestions, listTags } from "@/server/questions";
 import { QuestionList } from "./question-list";
 
 export default async function QuestionsPage(props: PageProps<"/questions">) {
   await connection();
+  const { id: userId } = await requireUser();
   const sp = await props.searchParams;
   const pick = (v: string | string[] | undefined) => (typeof v === "string" && v ? v : undefined);
   const filter = { q: pick(sp.q), category: pick(sp.category), tag: pick(sp.tag) };
   const [{ items, total }, categories, tags] = await Promise.all([
-    listQuestions(filter),
-    listCategories(),
-    listTags(),
+    listQuestions(userId, filter),
+    listCategories(userId),
+    listTags(userId),
   ]);
 
   return (

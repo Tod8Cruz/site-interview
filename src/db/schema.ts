@@ -5,6 +5,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -22,15 +23,34 @@ const timestamps = {
     .$onUpdate(() => new Date()),
 };
 
-export const questions = pgTable("questions", {
+/** 로그인 계정. 이메일은 소문자로 정규화해 저장하고, 비밀번호는 scrypt 해시만 둔다. */
+export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
-  question: text("question").notNull(),
-  modelAnswer: text("model_answer").notNull().default(""),
-  category: text("category"),
-  tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
-  sortOrder: integer("sort_order").notNull().default(0),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
   ...timestamps,
 });
+
+/**
+ * 데이터를 가진 사용자. 계정 기능 이전에 만든 행은 null이고, 첫 가입자가 넘겨받는다(server/users.ts).
+ * 코드는 항상 사용자 조건으로 조회하므로 null인 행은 아무에게도 보이지 않는다.
+ */
+const owner = () => uuid("user_id").references(() => users.id, { onDelete: "cascade" });
+
+export const questions = pgTable(
+  "questions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: owner(),
+    question: text("question").notNull(),
+    modelAnswer: text("model_answer").notNull().default(""),
+    category: text("category"),
+    tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index("questions_user_idx").on(t.userId)],
+);
 
 export type TurnDetectionType = "semantic_vad" | "server_vad";
 export type VadEagerness = "low" | "medium" | "high" | "auto";
@@ -39,6 +59,7 @@ export const prompts = pgTable(
   "prompts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    userId: owner(),
     name: text("name").notNull(),
     content: text("content").notNull(),
     voice: text("voice").notNull().default("marin"),
@@ -49,7 +70,7 @@ export const prompts = pgTable(
     isDefault: boolean("is_default").notNull().default(false),
     ...timestamps,
   },
-  (t) => [uniqueIndex("prompts_single_default").on(t.isDefault).where(sql`${t.isDefault}`)],
+  (t) => [uniqueIndex("prompts_single_default").on(t.userId).where(sql`${t.isDefault}`)],
 );
 
 /** 면접 시작 시점의 턴 감지 설정 스냅샷 (P-5) */
@@ -64,12 +85,13 @@ export const candidateProfiles = pgTable(
   "candidate_profiles",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    userId: owner(),
     name: text("name").notNull(),
     content: text("content").notNull(),
     isDefault: boolean("is_default").notNull().default(false),
     ...timestamps,
   },
-  (t) => [uniqueIndex("candidate_profiles_single_default").on(t.isDefault).where(sql`${t.isDefault}`)],
+  (t) => [uniqueIndex("candidate_profiles_single_default").on(t.userId).where(sql`${t.isDefault}`)],
 );
 
 /** 평가 기준(루브릭). 항목은 순서 있는 jsonb 배열이고, 평가할 때 통째로 스냅샷된다. */
@@ -77,12 +99,13 @@ export const evaluationRubrics = pgTable(
   "evaluation_rubrics",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    userId: owner(),
     name: text("name").notNull(),
     criteria: jsonb("criteria").$type<RubricCriterion[]>().notNull(),
     isDefault: boolean("is_default").notNull().default(false),
     ...timestamps,
   },
-  (t) => [uniqueIndex("evaluation_rubrics_single_default").on(t.isDefault).where(sql`${t.isDefault}`)],
+  (t) => [uniqueIndex("evaluation_rubrics_single_default").on(t.userId).where(sql`${t.isDefault}`)],
 );
 
 /** in_progress → paused → in_progress … → completed | aborted. paused는 통화가 없는 상태로, 비용이 들지 않는다. */
@@ -93,6 +116,7 @@ export const interviews = pgTable(
   "interviews",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    userId: owner(),
     title: text("title").notNull(),
     status: text("status").$type<InterviewStatus>().notNull().default("in_progress"),
     promptId: uuid("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
@@ -125,7 +149,7 @@ export const interviews = pgTable(
     audioStatus: text("audio_status").$type<AudioStatus>().notNull().default("none"),
     ...timestamps,
   },
-  (t) => [index("interviews_status_idx").on(t.status)],
+  (t) => [index("interviews_status_idx").on(t.status), index("interviews_user_idx").on(t.userId, t.startedAt)],
 );
 
 /**
@@ -200,6 +224,7 @@ export const interviewTurns = pgTable(
 /** 질문 API용 토큰. 원문은 발급 때 한 번만 보여 주고 SHA-256 해시만 저장한다. */
 export const apiTokens = pgTable("api_tokens", {
   id: uuid("id").primaryKey().defaultRandom(),
+  userId: owner(),
   name: text("name").notNull(),
   tokenHash: text("token_hash").notNull().unique(),
   /** 목록에서 어떤 토큰인지 알아보기 위한 앞부분 (예: mi_AbCd1234) */
@@ -209,10 +234,24 @@ export const apiTokens = pgTable("api_tokens", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/**
- * 계정 단위 설정(키-값). 비밀값(예: OpenAI API 키)은 서버에서 암호화해 넣는다.
- * 이 앱은 단일 계정이므로 사용자 컬럼 없이 키 하나당 한 행이다.
- */
+/** 사용자별 설정(키-값). 비밀값(예: OpenAI API 키)은 서버에서 암호화해 넣는다. */
+export const userSettings = pgTable(
+  "user_settings",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.key] })],
+);
+
+/** 계정 기능 이전의 단일 계정 설정. 첫 가입자의 user_settings로 옮긴 뒤 비운다(server/users.ts). */
 export const appSettings = pgTable("app_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
@@ -222,6 +261,7 @@ export const appSettings = pgTable("app_settings", {
     .$onUpdate(() => new Date()),
 });
 
+export type User = typeof users.$inferSelect;
 export type Question = typeof questions.$inferSelect;
 export type Prompt = typeof prompts.$inferSelect;
 export type CandidateProfile = typeof candidateProfiles.$inferSelect;

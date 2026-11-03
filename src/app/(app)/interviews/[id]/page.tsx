@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AUDIO_LABEL, formatDateTime, formatDuration, STATUS_LABEL } from "@/lib/format";
 import { getEvaluation } from "@/server/evaluations";
+import { requireUser } from "@/server/auth";
 import { isUuid } from "@/server/http";
 import { getInterview, getInterviewRecordings, getInterviewTurns } from "@/server/interviews";
 import { getQuestionsByIds } from "@/server/questions";
@@ -15,16 +16,17 @@ import { TitleEditor } from "./title-editor";
 export default async function InterviewPage(props: PageProps<"/interviews/[id]">) {
   const { id } = await props.params;
   if (!isUuid(id)) notFound();
-  const [interview, turns, recordings, evaluation, rubrics, apiKey] = await Promise.all([
-    getInterview(id),
+  const { id: userId } = await requireUser();
+  const interview = await getInterview(userId, id);
+  if (!interview) notFound();
+  const [turns, recordings, evaluation, rubrics, apiKey, questions] = await Promise.all([
     getInterviewTurns(id),
     getInterviewRecordings(id),
     getEvaluation(id),
-    listRubrics(),
-    getOpenAIApiKey(),
+    listRubrics(userId),
+    getOpenAIApiKey(userId),
+    getQuestionsByIds(userId, interview.questionIds),
   ]);
-  if (!interview) notFound();
-  const questions = await getQuestionsByIds(interview.questionIds);
 
   const finished = interview.status === "completed" || interview.status === "aborted";
   const hasAnswers = turns.some((t) => t.role === "candidate" && t.text.trim());
@@ -53,7 +55,11 @@ export default async function InterviewPage(props: PageProps<"/interviews/[id]">
       <Replay
         interviewId={id}
         title={interview.title}
-        segments={recordings.map((r) => ({ url: r.url, startMs: r.startMs, durationMs: r.durationMs }))}
+        segments={recordings.map((r) => ({
+          url: `/api/interviews/${id}/recordings/${r.id}/audio`,
+          startMs: r.startMs,
+          durationMs: r.durationMs,
+        }))}
         audioStatus={interview.audioStatus}
         questions={questions.map((q) => ({ id: q.id, question: q.question }))}
         turns={turns.map((t) => ({

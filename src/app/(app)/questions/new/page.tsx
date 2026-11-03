@@ -1,11 +1,13 @@
 import { connection } from "next/server";
 import { PageHeader } from "@/components/page-header";
+import { requireUser } from "@/server/auth";
 import { listCategories } from "@/server/questions";
 import { QuestionForm } from "../question-form";
 
 export default async function NewQuestionPage() {
   await connection();
-  const categories = await listCategories();
+  const { id: userId } = await requireUser();
+  const categories = await listCategories(userId);
   return (
     <>
       <PageHeader title="질문 추가" />

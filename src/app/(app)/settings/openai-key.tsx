@@ -12,20 +12,11 @@ export function OpenAIKey({ status }: { status: OpenAIKeyStatus }) {
   return (
     <div className="space-y-3">
       <div className="card p-4 text-sm">
-        {status.source === "settings" && (
+        {status.registered && (
           <p>
             <span className="chip mr-2 bg-success/15 text-success">등록됨</span>
             <code className="font-mono text-xs">{status.hint}</code>
             {status.updatedAt && <span className="ml-2 text-xs text-muted">저장 {formatDateTime(status.updatedAt)}</span>}
-          </p>
-        )}
-        {status.source === "env" && (
-          <p>
-            <span className="chip mr-2 bg-warning/15 text-warning">환경변수 사용 중</span>
-            <code className="font-mono text-xs">{status.hint}</code>
-            <span className="ml-2 text-xs text-muted">
-              서버의 OPENAI_API_KEY를 쓰고 있습니다. 아래에 키를 등록하면 그 키가 우선합니다.
-            </span>
           </p>
         )}
         {status.unreadable && (
@@ -33,7 +24,7 @@ export function OpenAIKey({ status }: { status: OpenAIKeyStatus }) {
             저장된 키를 읽을 수 없습니다. 서버의 SESSION_SECRET이 바뀐 것 같으니 키를 다시 등록해 주세요.
           </p>
         )}
-        {status.source === null && !status.unreadable && (
+        {!status.registered && !status.unreadable && (
           <p className="text-muted">아직 등록된 키가 없습니다. 키가 없으면 모의 면접을 시작할 수 없습니다.</p>
         )}
       </div>
@@ -41,7 +32,7 @@ export function OpenAIKey({ status }: { status: OpenAIKeyStatus }) {
       <form action={action} className="card flex flex-wrap items-end gap-2 p-4">
         <div className="min-w-0 flex-1 basis-64">
           <label className="label" htmlFor="openai-key">
-            {status.source === "settings" ? "새 키로 바꾸기" : "API 키"}
+            {status.registered ? "새 키로 바꾸기" : "API 키"}
           </label>
           <input
             id="openai-key"
@@ -69,7 +60,7 @@ export function OpenAIKey({ status }: { status: OpenAIKeyStatus }) {
         </p>
       </form>
 
-      {(status.source === "settings" || status.unreadable) && (
+      {(status.registered || status.unreadable) && (
         <form
           action={removeOpenAIKey}
           onSubmit={(e) => {

@@ -4,7 +4,7 @@
 
 | 단계 | 내용 |
 |------|------|
-| M1 | Next.js 16 + Drizzle/Postgres 스키마, 비밀번호 로그인(`proxy.ts`) |
+| M1 | Next.js 16 + Drizzle/Postgres 스키마, 로그인(`proxy.ts`) |
 | M2 | 예상 질문 UI(검색·필터·답변 가리기) + 질문 API(`/api/v1/questions`, `/api/v1/categories`) |
 | M3 | 프롬프트 여러 개 저장·기본값·턴 감지 설정, 시드 2개(부드러움 / STAR 깐깐함) |
 | M4 | Realtime 음성 면접(WebRTC), 턴 저장(단일 시계), 혼합 녹음 + IndexedDB 조각 보존, webm 탐색 보정, 1분 전 마무리 지시·시간 초과 종료, 응답 지연·사용량 계측 |
@@ -13,6 +13,7 @@
 | 추가 | 질문 API 토큰 발급·폐기(설정 > API 토큰, 해시만 저장), 로그인 없이 열리는 API 문서(`/api-docs`, AI용 마크다운 `/api/v1/docs`·`/llms.txt`), 일괄 추가(`POST /api/v1/questions/bulk`), 태그 목록(`/api/v1/tags`) |
 | M6 | 서버 쪽 비용 상한(최대 시간+2분 hangup, 종료 시 hangup, 살아 있는 통화 재접속 거부), cron 가드, 방치 면접 정리, 연결 끊김 안내, 오류·404·로딩 화면, 삭제 시 Blob 정리 |
 | 추가 | 면접 일시정지·재개(R-10): 통화를 끝내고 누적 시간·질문 번호·녹음 구간을 저장, 이어하기 때 새 통화에 이전 대화를 주입. 연결 끊김도 일시정지로 처리 |
+| 추가 | 계정: 누구나 이메일·비밀번호로 회원가입(`/signup`), 비밀번호는 scrypt 해시. 질문·프롬프트·지원자 정보·평가 기준·면접·API 토큰·OpenAI 키는 계정별로 분리. 계정 기능 이전 데이터와 키는 **첫 가입자**가 넘겨받는다 |
 | 추가 | AI 평가(PRD 12절 2차 후보): 끝난 면접의 대화 기록을 **평가 기준**(여러 세트, 기본값 하나, 항목 편집 가능)으로 OpenAI가 채점. 질문별 항목 점수(1~5)·코멘트·강점·개선점 + 면접 전체 총평. 모범답변 유사도는 보상하지 않도록 지시. 면접당 결과 하나(다시 평가하면 덮어씀), 기준은 스냅샷 |
 
 ## 로컬 실행
@@ -28,15 +29,16 @@ npm run dev
 - `DATABASE_URL` 호스트가 `localhost`면 node-postgres, 그 외(Neon)는 `@neondatabase/serverless` 드라이버를 쓴다.
 - 프롬프트 시드는 `/prompts`나 `/interviews/new`를 처음 열 때 들어간다.
 - `BLOB_READ_WRITE_TOKEN`이 없으면 녹음 업로드가 503으로 실패하고, 녹음은 브라우저(IndexedDB)에 남는다. 다시 보기 화면에서 로컬 녹음으로 재생·내려받기가 된다.
-- OpenAI API 키는 **설정 > OpenAI API 키**에서 등록한다(DB에 AES-256-GCM으로 암호화 저장, 암호화 키는 `SESSION_SECRET`에서 파생). 환경변수 `OPENAI_API_KEY`는 등록된 키가 없을 때만 쓴다. `SESSION_SECRET`을 바꾸면 키를 다시 등록해야 한다.
+- 처음 실행하면 `/signup`에서 계정을 만든다. 첫 가입자가 기존 데이터를 넘겨받는다.
+- OpenAI API 키는 사용자마다 **설정 > OpenAI API 키**에서 등록한다(`user_settings`에 AES-256-GCM으로 암호화 저장, 암호화 키는 `SESSION_SECRET`에서 파생). 면접·평가·통화 종료는 면접 주인의 키로 호출하고, 키가 없으면 면접을 시작할 수 없다(환경변수 키로 대신하지 않음). `SESSION_SECRET`을 바꾸면 모두 다시 로그인하고 키를 다시 등록해야 한다.
 - `OPENAI_BASE_URL`은 테스트용 목 서버를 가리킬 때만 쓴다.
 
 ## 배포 (Vercel + Neon)
 
 1. Neon 프로젝트를 만들고 `DATABASE_URL`을 받은 뒤 `npm run db:migrate`.
-2. Vercel 프로젝트 루트를 `web/`으로 설정하고 Blob 스토어를 연결(`BLOB_READ_WRITE_TOKEN` 자동 주입).
-3. 환경변수: `DATABASE_URL`, `OPENAI_REALTIME_MODEL`, `OPENAI_TRANSCRIBE_MODEL`, `QUESTIONS_API_KEY`(선택), `APP_PASSWORD`, `SESSION_SECRET`, `CRON_SECRET`. (`OPENAI_API_KEY`는 선택: 설정 화면에서 등록한 키가 우선)
-4. OpenAI에서 이 앱 전용 프로젝트를 만들고 월 예산 한도를 건 뒤(PRD 10절), 그 키를 **설정 > OpenAI API 키**에 등록한다.
+2. Vercel 프로젝트 루트를 `web/`으로 설정하고 **비공개(Private)** Blob 스토어를 연결(`BLOB_READ_WRITE_TOKEN` 자동 주입). 녹음은 비공개로 올라가고, 재생은 `/api/interviews/{id}/recordings/{recordingId}/audio`가 면접 주인을 확인한 뒤 짧은 수명의 서명 URL로 넘겨준다. 공개 스토어로는 업로드가 실패한다.
+3. 환경변수: `DATABASE_URL`, `OPENAI_REALTIME_MODEL`, `OPENAI_TRANSCRIBE_MODEL`, `OPENAI_EVAL_MODEL`, `SESSION_SECRET`, `CRON_SECRET`.
+4. 배포 후 `/signup`에서 계정을 만들고, OpenAI에서 이 앱 전용 프로젝트를 만들어 월 예산 한도를 건 뒤(PRD 10절) 그 키를 **설정 > OpenAI API 키**에 등록한다. 다른 사용자도 각자 자기 키를 등록한다.
 5. 서버 쪽 비용 상한 cron (`GET /api/cron/realtime-guard`, `Authorization: Bearer $CRON_SECRET`):
    - **Vercel Pro**: `web/vercel.json`에 아래를 추가한다. Vercel Cron이 `CRON_SECRET`을 Bearer로 붙여 호출한다.
      ```json
@@ -58,7 +60,7 @@ npm run dev
 
 전체 설명은 앱의 `/api-docs`(AI에게는 `/api/v1/docs` 또는 `/llms.txt` 마크다운)에 있다. 원문은 `src/lib/api-docs.ts` 한 곳이니 API를 바꾸면 같이 고친다.
 
-- 인증: `Authorization: Bearer <토큰>`. 토큰은 **설정 > API 토큰**에서 발급한다(만료 30일/90일/1년/없음, 원문은 발급 직후 한 번만 표시, DB엔 SHA-256 해시만 저장). 환경변수 `QUESTIONS_API_KEY`도 계속 받는다(선택).
+- 인증: `Authorization: Bearer <토큰>`. 토큰은 **설정 > API 토큰**에서 발급한다(만료 30일/90일/1년/없음, 원문은 발급 직후 한 번만 표시, DB엔 SHA-256 해시만 저장). 토큰은 발급한 계정의 질문만 다룬다.
 - 엔드포인트: `GET/POST /api/v1/questions`, `POST /api/v1/questions/bulk`(최대 100개, 전부 아니면 전무), `GET/PATCH/DELETE /api/v1/questions/{id}`, `GET /api/v1/categories`, `GET /api/v1/tags`
 
 ```bash
@@ -73,8 +75,10 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 
 ```
 src/
-  proxy.ts                     로그인 보호 (/api/v1/*, /api-docs, /llms.txt 제외)
-  db/schema.ts                 questions, prompts, interviews, interview_turns, api_tokens, evaluation_rubrics, interview_evaluations
+  proxy.ts                     로그인 보호: 세션 쿠키 서명 확인 (/login, /signup, /api/v1/*, /api-docs, /llms.txt 제외)
+  db/schema.ts                 users, user_settings, questions, prompts, interviews, interview_turns, api_tokens, evaluation_rubrics, interview_evaluations
+  server/auth.ts               현재 사용자(currentUser·requireUser), 세션 쿠키. 서비스 함수는 모두 userId를 첫 인자로 받는다
+  server/users.ts              회원가입(첫 가입자가 기존 데이터 인수)·로그인
   server/                      서비스 계층 (UI·API 공용) — questions, prompts, interviews, api-tokens, realtime 세션 설정, rubrics, evaluations
   server/evaluations.ts        OpenAI Responses API(JSON 스키마 고정)로 루브릭 평가 — 면접당 하나, 덮어쓰기
   lib/evaluation.ts            답변을 질문별로 묶기, 평가 프롬프트·출력 스키마, 결과 정규화, 항목 평균, 루브릭 시드

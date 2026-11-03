@@ -28,7 +28,7 @@ export function decryptSecret(stored: string): string | null {
   const [version, iv, tag, body] = stored.split(".");
   if (version !== VERSION || !iv || !tag || !body) return null;
   try {
-    const decipher = createDecipheriv(ALGORITHM, key(), Buffer.from(iv, "base64url"));
+    const decipher = createDecipheriv(ALGORITHM, key(), Buffer.from(iv, "base64url"), { authTagLength: 16 });
     decipher.setAuthTag(Buffer.from(tag, "base64url"));
     return Buffer.concat([decipher.update(Buffer.from(body, "base64url")), decipher.final()]).toString("utf8");
   } catch {

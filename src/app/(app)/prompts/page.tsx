@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { PageHeader } from "@/components/page-header";
+import { requireUser } from "@/server/auth";
 import { listPrompts } from "@/server/prompts";
 import { makeDefault } from "./actions";
 
 export default async function PromptsPage() {
   await connection();
-  const prompts = await listPrompts();
+  const { id: userId } = await requireUser();
+  const prompts = await listPrompts(userId);
   return (
     <>
       <PageHeader

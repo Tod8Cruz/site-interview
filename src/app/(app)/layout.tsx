@@ -2,8 +2,10 @@ import { logout } from "@/app/login/actions";
 import { Logo } from "@/components/logo";
 import { RecordingRecovery } from "@/components/recording-recovery";
 import { SideNav } from "@/components/side-nav";
+import { requireUser } from "@/server/auth";
 
-export default function AppLayout({ children }: LayoutProps<"/">) {
+export default async function AppLayout({ children }: LayoutProps<"/">) {
+  const user = await requireUser();
   return (
     <div className="flex flex-1 flex-col md:flex-row">
       {/* md 이상: 왼쪽 고정 사이드바. 그보다 좁으면 상단 고정 바 한 줄. */}
@@ -15,6 +17,7 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
         <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto md:flex-col md:items-stretch md:gap-0 md:overflow-visible">
           <SideNav />
           <form action={logout} className="ml-auto shrink-0 md:ml-0 md:mt-auto md:border-t md:border-border md:pt-3">
+            <p className="hidden truncate px-2.5 pb-1 text-xs text-muted md:block" title={user.email}>{user.email}</p>
             <button className="whitespace-nowrap text-sm text-muted hover:text-text md:block md:w-full md:rounded-md md:px-2.5 md:py-1.5 md:text-left md:hover:bg-surface-2/60">
               로그아웃
             </button>

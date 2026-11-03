@@ -4,6 +4,7 @@ import { after, NextResponse } from "next/server";
 import { z } from "zod";
 import { formatZodError } from "@/lib/validation";
 import { findValidApiToken, touchApiToken } from "./api-tokens";
+import { currentUser } from "./auth";
 import { ConflictError, NotFoundError } from "./interviews";
 import { OpenAIError } from "./openai";
 
@@ -13,27 +14,34 @@ export function jsonError(status: number, code: string, message: string, extra?:
 
 const digest = (value: string) => createHash("sha256").update(value).digest();
 
+export type ApiAuth = { userId: string; denied?: undefined } | { userId?: undefined; denied: NextResponse };
+
 /**
- * 질문 API 인증 (A-2). 실패하면 응답을, 성공하면 null을 돌려준다.
- * 설정 화면에서 발급한 토큰과 환경변수 QUESTIONS_API_KEY(선택) 둘 다 받는다.
+ * 질문 API 인증 (A-2). 설정 화면에서 발급한 토큰으로 인증하고, 토큰을 발급한 사용자의 질문만 다룬다.
+ * 실패하면 denied에 돌려줄 응답이 들어 있다.
  */
-export async function checkApiKey(request: Request) {
+export async function checkApiKey(request: Request): Promise<ApiAuth> {
   const header = request.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   if (!token) {
-    return jsonError(401, "unauthorized", "Authorization: Bearer <API 토큰> 헤더가 필요합니다.");
+    return { denied: jsonError(401, "unauthorized", "Authorization: Bearer <API 토큰> 헤더가 필요합니다.") };
   }
-  const envKey = process.env.QUESTIONS_API_KEY;
-  if (envKey && timingSafeEqual(digest(token), digest(envKey))) return null;
 
   const found = await findValidApiToken(token).catch((error) => {
     console.error(error);
     return undefined;
   });
-  if (found === undefined) return jsonError(500, "internal_error", "서버 오류가 발생했습니다.");
-  if (!found) return jsonError(401, "unauthorized", "API 토큰이 올바르지 않거나 만료되었습니다.");
+  if (found === undefined) return { denied: jsonError(500, "internal_error", "서버 오류가 발생했습니다.") };
+  if (!found) return { denied: jsonError(401, "unauthorized", "API 토큰이 올바르지 않거나 만료되었습니다.") };
   after(() => touchApiToken(found.id).catch(console.error));
-  return null;
+  return { userId: found.userId };
+}
+
+/** 내부 API(브라우저가 쿠키로 호출) 인증. 로그인한 사용자가 없으면 denied에 401 응답이 들어 있다. */
+export async function checkSession(): Promise<ApiAuth> {
+  const user = await currentUser();
+  if (!user) return { denied: jsonError(401, "unauthorized", "로그인이 필요합니다.") };
+  return { userId: user.id };
 }
 
 /** Cron 라우트 인증. CRON_SECRET이 없으면 호출을 막는다. */

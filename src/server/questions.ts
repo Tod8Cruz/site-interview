@@ -23,21 +23,21 @@ function escapeLike(value: string) {
   return value.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
-function whereFor(filter: QuestionFilter) {
-  const conditions = [];
+function whereFor(userId: string, filter: QuestionFilter) {
+  const conditions = [eq(questions.userId, userId)];
   if (filter.q) {
     const pattern = `%${escapeLike(filter.q)}%`;
-    conditions.push(or(ilike(questions.question, pattern), ilike(questions.modelAnswer, pattern)));
+    conditions.push(or(ilike(questions.question, pattern), ilike(questions.modelAnswer, pattern))!);
   }
   if (filter.category) conditions.push(eq(questions.category, filter.category));
   if (filter.tag) conditions.push(sql`${filter.tag} = any(${questions.tags})`);
-  return conditions.length ? and(...conditions) : undefined;
+  return and(...conditions);
 }
 
 const ordering = [asc(questions.sortOrder), desc(questions.createdAt)];
 
-export async function listQuestions(filter: QuestionFilter = {}) {
-  const where = whereFor(filter);
+export async function listQuestions(userId: string, filter: QuestionFilter = {}) {
+  const where = whereFor(userId, filter);
   const [items, [{ total }]] = await Promise.all([
     db
       .select()
@@ -51,53 +51,62 @@ export async function listQuestions(filter: QuestionFilter = {}) {
   return { items, total };
 }
 
-export async function getQuestionsByIds(ids: string[]) {
+/** 이 사용자의 질문만, ids 순서대로. 남의 질문 ID는 조용히 빠진다. */
+export async function getQuestionsByIds(userId: string, ids: string[]) {
   if (!ids.length) return [];
-  const rows = await db.select().from(questions).where(inArray(questions.id, ids));
+  const rows = await db
+    .select()
+    .from(questions)
+    .where(and(eq(questions.userId, userId), inArray(questions.id, ids)));
   const byId = new Map(rows.map((r) => [r.id, r]));
   return ids.flatMap((id) => byId.get(id) ?? []);
 }
 
-export async function getQuestion(id: string) {
-  const [row] = await db.select().from(questions).where(eq(questions.id, id));
+const owned = (userId: string, id: string) => and(eq(questions.userId, userId), eq(questions.id, id));
+
+export async function getQuestion(userId: string, id: string) {
+  const [row] = await db.select().from(questions).where(owned(userId, id));
   return row ?? null;
 }
 
-export async function createQuestion(input: QuestionCreateInput) {
+export async function createQuestion(userId: string, input: QuestionCreateInput) {
   const data = questionCreateSchema.parse(input);
-  const [row] = await db.insert(questions).values(data).returning();
+  const [row] = await db.insert(questions).values({ ...data, userId }).returning();
   return row;
 }
 
 /** 전부 들어가거나 하나도 안 들어간다. 입력 순서대로 돌려준다. */
-export async function createQuestions(input: QuestionBulkCreateInput) {
+export async function createQuestions(userId: string, input: QuestionBulkCreateInput) {
   const { items } = questionBulkCreateSchema.parse(input);
-  return db.insert(questions).values(items).returning();
+  return db
+    .insert(questions)
+    .values(items.map((item) => ({ ...item, userId })))
+    .returning();
 }
 
-export async function updateQuestion(id: string, input: QuestionUpdateInput) {
+export async function updateQuestion(userId: string, id: string, input: QuestionUpdateInput) {
   const data = questionUpdateSchema.parse(input);
-  const [row] = await db.update(questions).set(data).where(eq(questions.id, id)).returning();
+  const [row] = await db.update(questions).set(data).where(owned(userId, id)).returning();
   return row ?? null;
 }
 
-export async function deleteQuestion(id: string) {
-  const [row] = await db.delete(questions).where(eq(questions.id, id)).returning({ id: questions.id });
+export async function deleteQuestion(userId: string, id: string) {
+  const [row] = await db.delete(questions).where(owned(userId, id)).returning({ id: questions.id });
   return Boolean(row);
 }
 
-export async function listCategories() {
+export async function listCategories(userId: string) {
   const rows = await db
     .selectDistinct({ category: questions.category })
     .from(questions)
-    .where(isNotNull(questions.category))
+    .where(and(eq(questions.userId, userId), isNotNull(questions.category)))
     .orderBy(asc(questions.category));
   return rows.map((r) => r.category as string);
 }
 
-export async function listTags() {
+export async function listTags(userId: string) {
   const rows = await db.execute<{ tag: string }>(
-    sql`select distinct unnest(${questions.tags}) as tag from ${questions} order by tag`,
+    sql`select distinct unnest(${questions.tags}) as tag from ${questions} where ${questions.userId} = ${userId} order by tag`,
   );
   return rows.rows.map((r) => r.tag);
 }

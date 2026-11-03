@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { formatZodError } from "@/lib/validation";
+import { requireUser } from "@/server/auth";
 import { createQuestion, deleteQuestion, updateQuestion } from "@/server/questions";
 
 export type QuestionFormState = { error?: string };
@@ -26,10 +27,11 @@ export async function saveQuestion(
   _prev: QuestionFormState,
   formData: FormData,
 ): Promise<QuestionFormState> {
+  const { id: userId } = await requireUser();
   try {
     const input = fromForm(formData);
-    if (id) await updateQuestion(id, input);
-    else await createQuestion(input);
+    if (id) await updateQuestion(userId, id, input);
+    else await createQuestion(userId, input);
   } catch (error) {
     if (error instanceof z.ZodError) return { error: formatZodError(error) };
     throw error;
@@ -39,7 +41,8 @@ export async function saveQuestion(
 }
 
 export async function removeQuestion(id: string) {
-  await deleteQuestion(id);
+  const { id: userId } = await requireUser();
+  await deleteQuestion(userId, id);
   revalidatePath("/questions");
   redirect("/questions");
 }

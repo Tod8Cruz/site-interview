@@ -60,9 +60,9 @@ export function buildRealtimeSession(interview: Interview, options: { resume?: b
 
 export { OPENAI_BASE_URL };
 
-/** 서버에서 Realtime 통화를 끊는다 (WebRTC·SIP 공통). 실패해도 예외를 던지지 않는다. */
-export async function hangupCall(callId: string) {
-  const apiKey = await getOpenAIApiKey();
+/** 서버에서 Realtime 통화를 끊는다 (WebRTC·SIP 공통). 통화를 연 사용자의 키로 끊는다. 실패해도 예외를 던지지 않는다. */
+export async function hangupCall(userId: string, callId: string) {
+  const apiKey = await getOpenAIApiKey(userId);
   if (!apiKey) return false;
   try {
     const response = await fetch(`${OPENAI_BASE_URL()}/realtime/calls/${encodeURIComponent(callId)}/hangup`, {

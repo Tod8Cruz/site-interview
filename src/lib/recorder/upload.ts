@@ -45,7 +45,7 @@ export async function uploadSegment(interviewId: string, startMs: number, source
     });
     const type = file.type.split(";")[0] || "audio/webm";
     const blob = await upload(`interviews/${interviewId}-${startMs}.${extensionFor(type)}`, file, {
-      access: "public",
+      access: "private",
       handleUploadUrl: "/api/blob/upload",
       contentType: type,
       multipart: file.size > MULTIPART_THRESHOLD,

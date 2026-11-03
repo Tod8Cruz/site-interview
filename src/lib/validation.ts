@@ -133,6 +133,22 @@ export const turnNoteSchema = z.object({
   noteQuestionId: z.uuid().nullish(),
 });
 
+export const PASSWORD_MIN_LENGTH = 8;
+
+export const signupSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .pipe(z.email("이메일 형식이 올바르지 않습니다.").max(254)),
+  password: z
+    .string()
+    .min(PASSWORD_MIN_LENGTH, `비밀번호는 ${PASSWORD_MIN_LENGTH}자 이상이어야 합니다.`)
+    .max(200, "비밀번호가 너무 깁니다."),
+});
+
+export type SignupInput = z.input<typeof signupSchema>;
+
 export const API_TOKEN_EXPIRY_DAYS = [30, 90, 365] as const;
 
 export const apiTokenCreateSchema = z.object({

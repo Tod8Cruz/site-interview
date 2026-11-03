@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
+import { requireUser } from "@/server/auth";
 import { isUuid } from "@/server/http";
 import { getProfile } from "@/server/profiles";
 import { ProfileForm } from "../../profile-form";
@@ -7,7 +8,8 @@ import { ProfileForm } from "../../profile-form";
 export default async function EditProfilePage(props: PageProps<"/settings/profiles/[id]">) {
   const { id } = await props.params;
   if (!isUuid(id)) notFound();
-  const profile = await getProfile(id);
+  const { id: userId } = await requireUser();
+  const profile = await getProfile(userId, id);
   if (!profile) notFound();
   return (
     <>

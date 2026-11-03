@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { deleteEvaluation, getEvaluation, runEvaluation } from "@/server/evaluations";
-import { handleRouteError, isUuid, jsonError, readJson } from "@/server/http";
+import { checkSession, handleRouteError, isUuid, jsonError, readJson } from "@/server/http";
+import { getInterview } from "@/server/interviews";
 import { OPENAI_NOT_CONFIGURED_MESSAGE } from "@/server/openai";
 import { getOpenAIApiKey } from "@/server/settings";
 
@@ -10,20 +11,24 @@ export const maxDuration = 120;
 const notFound = () => jsonError(404, "not_found", "평가 결과가 없습니다.");
 
 export async function GET(_request: Request, ctx: RouteContext<"/api/interviews/[id]/evaluation">) {
+  const { userId, denied } = await checkSession();
+  if (denied) return denied;
   const { id } = await ctx.params;
-  if (!isUuid(id)) return notFound();
+  if (!isUuid(id) || !(await getInterview(userId, id))) return notFound();
   const evaluation = await getEvaluation(id);
   return evaluation ? NextResponse.json(evaluation) : notFound();
 }
 
 /** 면접을 루브릭으로 평가해 저장한다. 본문: { rubricId?: uuid } (비우면 기본 루브릭) */
 export async function POST(request: Request, ctx: RouteContext<"/api/interviews/[id]/evaluation">) {
+  const { userId, denied } = await checkSession();
+  if (denied) return denied;
   const { id } = await ctx.params;
   if (!isUuid(id)) return jsonError(404, "not_found", "면접을 찾을 수 없습니다.");
-  const apiKey = await getOpenAIApiKey();
+  const apiKey = await getOpenAIApiKey(userId);
   if (!apiKey) return jsonError(503, "openai_not_configured", OPENAI_NOT_CONFIGURED_MESSAGE);
   try {
-    const evaluation = await runEvaluation(id, await readJson(request), apiKey);
+    const evaluation = await runEvaluation(userId, id, await readJson(request), apiKey);
     return NextResponse.json(evaluation);
   } catch (error) {
     return handleRouteError(error);
@@ -31,7 +36,9 @@ export async function POST(request: Request, ctx: RouteContext<"/api/interviews/
 }
 
 export async function DELETE(_request: Request, ctx: RouteContext<"/api/interviews/[id]/evaluation">) {
+  const { userId, denied } = await checkSession();
+  if (denied) return denied;
   const { id } = await ctx.params;
-  if (!isUuid(id)) return notFound();
+  if (!isUuid(id) || !(await getInterview(userId, id))) return notFound();
   return (await deleteEvaluation(id)) ? new NextResponse(null, { status: 204 }) : notFound();
 }

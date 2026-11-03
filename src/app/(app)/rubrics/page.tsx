@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { PageHeader } from "@/components/page-header";
+import { requireUser } from "@/server/auth";
 import { listRubrics } from "@/server/rubrics";
 import { makeDefaultRubric } from "./actions";
 
 export default async function RubricsPage() {
   await connection();
-  const rubrics = await listRubrics();
+  const { id: userId } = await requireUser();
+  const rubrics = await listRubrics(userId);
   return (
     <>
       <PageHeader

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
+import { requireUser } from "@/server/auth";
 import { isUuid } from "@/server/http";
 import { getRubric } from "@/server/rubrics";
 import { RubricForm } from "../rubric-form";
@@ -7,7 +8,8 @@ import { RubricForm } from "../rubric-form";
 export default async function EditRubricPage(props: PageProps<"/rubrics/[id]">) {
   const { id } = await props.params;
   if (!isUuid(id)) notFound();
-  const rubric = await getRubric(id);
+  const { id: userId } = await requireUser();
+  const rubric = await getRubric(userId, id);
   if (!rubric) notFound();
   return (
     <>

@@ -18,6 +18,7 @@ import { getDefaultRubric, getRubric } from "./rubrics";
 
 export const EVAL_MODEL = () => process.env.OPENAI_EVAL_MODEL || "gpt-4.1-mini";
 
+/** 호출자가 면접 주인을 확인한다. */
 export async function getEvaluation(interviewId: string) {
   const [row] = await db.select().from(interviewEvaluations).where(eq(interviewEvaluations.interviewId, interviewId));
   return row ?? null;
@@ -33,19 +34,19 @@ export async function deleteEvaluation(interviewId: string) {
 
 /**
  * 끝난 면접의 대화 기록을 루브릭으로 평가해 저장한다(이미 있으면 덮어쓴다).
- * API 키는 라우트가 없을 때 503으로 처리한 뒤 넘긴다. 실패하면 아무것도 쓰지 않는다.
+ * API 키(이 사용자의 키)는 라우트가 없을 때 503으로 처리한 뒤 넘긴다. 실패하면 아무것도 쓰지 않는다.
  */
-export async function runEvaluation(interviewId: string, input: unknown, apiKey: string) {
+export async function runEvaluation(userId: string, interviewId: string, input: unknown, apiKey: string) {
   const { rubricId } = evaluationRunSchema.parse(input);
-  const interview = await getInterview(interviewId);
+  const interview = await getInterview(userId, interviewId);
   if (!interview) throw new NotFoundError("면접을 찾을 수 없습니다.");
   if (interview.status !== "completed" && interview.status !== "aborted") {
     throw new BadRequestError("면접을 마친 뒤에 평가할 수 있습니다.");
   }
   const [turns, questions, rubric] = await Promise.all([
     getInterviewTurns(interviewId),
-    getQuestionsByIds(interview.questionIds),
-    rubricId ? getRubric(rubricId) : getDefaultRubric(),
+    getQuestionsByIds(userId, interview.questionIds),
+    rubricId ? getRubric(userId, rubricId) : getDefaultRubric(userId),
   ]);
   if (!rubric) throw new NotFoundError("평가 기준을 찾을 수 없습니다.");
 

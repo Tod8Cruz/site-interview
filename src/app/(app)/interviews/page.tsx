@@ -2,6 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { PageHeader } from "@/components/page-header";
 import { AUDIO_LABEL, formatDateTime, formatDuration, STATUS_LABEL } from "@/lib/format";
+import { requireUser } from "@/server/auth";
 import { isUuid } from "@/server/http";
 import { getInterview, getNotedQuestionIds, listInterviews } from "@/server/interviews";
 import { listProfiles } from "@/server/profiles";
@@ -19,9 +20,9 @@ const statusTone = {
 
 const isOpen = (status: keyof typeof statusTone) => status === "in_progress" || status === "paused";
 
-async function loadPrefill(from: string | null, notedOnly: boolean): Promise<StartPrefill | null> {
+async function loadPrefill(userId: string, from: string | null, notedOnly: boolean): Promise<StartPrefill | null> {
   if (!from) return null;
-  const source = await getInterview(from);
+  const source = await getInterview(userId, from);
   if (!source) return null;
   return {
     sourceInterviewId: source.id,
@@ -35,14 +36,15 @@ async function loadPrefill(from: string | null, notedOnly: boolean): Promise<Sta
 
 export default async function InterviewsPage(props: PageProps<"/interviews">) {
   await connection();
+  const { id: userId } = await requireUser();
   const { start, from, only } = await props.searchParams;
   const sourceId = typeof from === "string" && isUuid(from) ? from : null;
   const [interviews, prompts, profiles, { items: questions }, prefill] = await Promise.all([
-    listInterviews(),
-    listPrompts(),
-    listProfiles(),
-    listQuestions(),
-    loadPrefill(sourceId, only === "noted"),
+    listInterviews(userId),
+    listPrompts(userId),
+    listProfiles(userId),
+    listQuestions(userId),
+    loadPrefill(userId, sourceId, only === "noted"),
   ]);
   const startProps = {
     prompts,

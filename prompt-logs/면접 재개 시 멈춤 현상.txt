@@ -4,3 +4,26 @@
 
 [2026-11-03 17:14:56] 1번만 수행해.
 
+[2026-11-03 17:15:20] 로그인 기능 만들어. 
+그리고 openai api key를 사용자 계정에 넣은걸 사용하는 구조로 만들어줘.
+
+[2026-11-03 17:24:38] <task-notification>
+<task-id>byz4ksx7z</task-id>
+<tool-use-id>toolu_01Uh4ctVaEDWE2a67tD8T4Qf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tod-projects-site-interview/b3026bf0-694c-46df-b92b-4569a886fa49/tasks/byz4ksx7z.output</output-file>
+<status>failed</status>
+<summary>Background command "Run dev server against test database" failed with exit code 143</summary>
+</task-notification>
+
+[2026-11-03 20:02:48] 서버 실행
+
+[2026-11-03 20:06:41] 이 프로그램에서 AI를 사용하는 경우가 평가, 음성 말고 또 뭐 있어?
+
+[2026-11-03 20:07:20] 면접 평가가 저 모델로 충분할까?
+
+[2026-11-03 20:08:06] 추천 모델 검색해서 알려줘
+
+[2026-11-03 20:09:34] 녹음은 어디 저장되?
+
+[2026-11-03 20:10:28] 비공개로 바꿔줘.
+

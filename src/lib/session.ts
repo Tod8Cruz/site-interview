@@ -29,16 +29,18 @@ function constantTimeEqual(a: string, b: string) {
   return diff === 0;
 }
 
-export async function createSessionToken() {
-  const exp = String(Date.now() + SESSION_MAX_AGE_S * 1000);
-  return `${exp}.${await sign(exp)}`;
+/** 세션 토큰: `사용자ID.만료시각.서명`. DB 조회 없이 proxy에서 검증할 수 있다. */
+export async function createSessionToken(userId: string) {
+  const payload = `${userId}.${Date.now() + SESSION_MAX_AGE_S * 1000}`;
+  return `${payload}.${await sign(payload)}`;
 }
 
-export async function verifySessionToken(token: string | undefined) {
-  if (!token) return false;
-  const [exp, sig] = token.split(".");
-  if (!exp || !sig || Number(exp) < Date.now()) return false;
-  return constantTimeEqual(sig, await sign(exp));
+/** 유효하면 사용자 ID, 아니면 null (예전 단일 계정 형식의 토큰도 null) */
+export async function verifySessionToken(token: string | undefined): Promise<string | null> {
+  if (!token) return null;
+  const [userId, exp, sig, ...rest] = token.split(".");
+  if (!userId || !exp || !sig || rest.length || Number(exp) < Date.now()) return null;
+  return constantTimeEqual(sig, await sign(`${userId}.${exp}`)) ? userId : null;
 }
 
 export { constantTimeEqual };

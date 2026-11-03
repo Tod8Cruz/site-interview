@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
+import { requireUser } from "@/server/auth";
 import { isUuid } from "@/server/http";
 import { getPrompt } from "@/server/prompts";
 import { PromptForm } from "../prompt-form";
@@ -7,7 +8,8 @@ import { PromptForm } from "../prompt-form";
 export default async function EditPromptPage(props: PageProps<"/prompts/[id]">) {
   const { id } = await props.params;
   if (!isUuid(id)) notFound();
-  const prompt = await getPrompt(id);
+  const { id: userId } = await requireUser();
+  const prompt = await getPrompt(userId, id);
   if (!prompt) notFound();
   return (
     <>

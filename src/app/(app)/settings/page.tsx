@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { PageHeader } from "@/components/page-header";
+import { requireUser } from "@/server/auth";
 import { listApiTokens } from "@/server/api-tokens";
 import { requestOrigin } from "@/server/origin";
 import { listProfiles } from "@/server/profiles";
@@ -11,11 +12,12 @@ import { OpenAIKey } from "./openai-key";
 
 export default async function SettingsPage() {
   await connection();
+  const { id: userId } = await requireUser();
   const [profiles, tokens, origin, openaiKey] = await Promise.all([
-    listProfiles(),
-    listApiTokens(),
+    listProfiles(userId),
+    listApiTokens(userId),
     requestOrigin(),
-    getOpenAIKeyStatus(),
+    getOpenAIKeyStatus(userId),
   ]);
   return (
     <>

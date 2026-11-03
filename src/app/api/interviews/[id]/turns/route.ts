@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
-import { handleRouteError, isUuid, jsonError, readJson } from "@/server/http";
+import { checkSession, handleRouteError, isUuid, jsonError, readJson } from "@/server/http";
 import { getInterview, saveTurn } from "@/server/interviews";
 
 export async function POST(request: Request, ctx: RouteContext<"/api/interviews/[id]/turns">) {
+  const { userId, denied } = await checkSession();
+  if (denied) return denied;
   const { id } = await ctx.params;
-  const interview = isUuid(id) ? await getInterview(id) : null;
+  const interview = isUuid(id) ? await getInterview(userId, id) : null;
   if (!interview) return jsonError(404, "not_found", "면접을 찾을 수 없습니다.");
   try {
     const body = (await readJson(request)) as { questionId?: unknown };

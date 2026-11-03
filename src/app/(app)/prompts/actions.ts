@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { formatZodError } from "@/lib/validation";
+import { requireUser } from "@/server/auth";
 import { createPrompt, deletePrompt, setDefaultPrompt, updatePrompt } from "@/server/prompts";
 
 export type PromptFormState = { error?: string };
@@ -13,6 +14,7 @@ export async function savePrompt(
   _prev: PromptFormState,
   formData: FormData,
 ): Promise<PromptFormState> {
+  const { id: userId } = await requireUser();
   const input = {
     name: String(formData.get("name") ?? ""),
     content: String(formData.get("content") ?? ""),
@@ -23,8 +25,8 @@ export async function savePrompt(
     silenceMs: String(formData.get("silenceMs") ?? "1500"),
   } as never;
   try {
-    if (id) await updatePrompt(id, input);
-    else await createPrompt(input);
+    if (id) await updatePrompt(userId, id, input);
+    else await createPrompt(userId, input);
   } catch (error) {
     if (error instanceof z.ZodError) return { error: formatZodError(error) };
     throw error;
@@ -34,12 +36,14 @@ export async function savePrompt(
 }
 
 export async function makeDefault(id: string) {
-  await setDefaultPrompt(id);
+  const { id: userId } = await requireUser();
+  await setDefaultPrompt(userId, id);
   revalidatePath("/prompts");
 }
 
 export async function removePrompt(id: string) {
-  await deletePrompt(id);
+  const { id: userId } = await requireUser();
+  await deletePrompt(userId, id);
   revalidatePath("/prompts");
   redirect("/prompts");
 }
