@@ -74,6 +74,26 @@ export const promptSchema = z.object({
 
 export type PromptInput = z.input<typeof promptSchema>;
 
+/** 프롬프트 생성(API). 이름·내용만 필수이고 나머지는 기본값. isDefault: true면 만든 뒤 기본값으로 올린다. */
+export const promptCreateSchema = promptSchema.extend({
+  voice: promptSchema.shape.voice.default("marin"),
+  maxMinutes: promptSchema.shape.maxMinutes.default(20),
+  turnDetection: promptSchema.shape.turnDetection.default("semantic_vad"),
+  vadEagerness: promptSchema.shape.vadEagerness.default("low"),
+  silenceMs: promptSchema.shape.silenceMs.default(1500),
+  isDefault: z.boolean().default(false),
+});
+
+export type PromptCreateInput = z.input<typeof promptCreateSchema>;
+
+/** 프롬프트 일부 수정. 보낸 필드만 바뀐다. isDefault는 true로만 바꿀 수 있다(해제는 다른 것을 기본값으로). */
+export const promptUpdateSchema = promptSchema
+  .extend({ isDefault: z.literal(true, "isDefault는 true만 보낼 수 있습니다. 기본값을 바꾸려면 다른 프롬프트에 true를 보내세요.") })
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, "수정할 필드가 없습니다.");
+
+export type PromptUpdateInput = z.input<typeof promptUpdateSchema>;
+
 export const profileSchema = z.object({
   name: z.string().trim().min(1, "이름을 입력하세요.").max(100),
   content: z.string().trim().min(1, "지원자 정보를 입력하세요.").max(10000),
@@ -184,6 +204,33 @@ export const rubricSchema = z
   .refine((r) => new Set(r.criteria.map((c) => c.id)).size === r.criteria.length, "항목 id가 중복됩니다.");
 
 export type RubricInput = z.input<typeof rubricSchema>;
+
+const rubricCriteria = rubricSchema.shape.criteria;
+const uniqueCriterionIds = (criteria: { id: string }[]) => new Set(criteria.map((c) => c.id)).size === criteria.length;
+
+/** 평가 기준 생성(API). isDefault: true면 만든 뒤 기본값으로 올린다. */
+export const rubricCreateSchema = z
+  .object({
+    name: rubricSchema.shape.name,
+    criteria: rubricCriteria,
+    isDefault: z.boolean().default(false),
+  })
+  .refine((r) => uniqueCriterionIds(r.criteria), "항목 id가 중복됩니다.");
+
+export type RubricCreateInput = z.input<typeof rubricCreateSchema>;
+
+/** 평가 기준 일부 수정. criteria는 배열 전체를 바꾼다. isDefault는 true로만 바꿀 수 있다. */
+export const rubricUpdateSchema = z
+  .object({
+    name: rubricSchema.shape.name,
+    criteria: rubricCriteria,
+    isDefault: z.literal(true, "isDefault는 true만 보낼 수 있습니다. 기본값을 바꾸려면 다른 평가 기준에 true를 보내세요."),
+  })
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, "수정할 필드가 없습니다.")
+  .refine((v) => !v.criteria || uniqueCriterionIds(v.criteria), "항목 id가 중복됩니다.");
+
+export type RubricUpdateInput = z.input<typeof rubricUpdateSchema>;
 
 export const evaluationRunSchema = z.object({
   /** 비우면 기본 평가 기준 */

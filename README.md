@@ -10,7 +10,8 @@
 | M4 | Realtime 음성 면접(WebRTC), 턴 저장(단일 시계), 혼합 녹음 + IndexedDB 조각 보존, webm 탐색 보정, 1분 전 마무리 지시·시간 초과 종료, 응답 지연·사용량 계측 |
 | M5 | 다시 보기: 턴 클릭 이동, 턴별 메모(자동 저장)와 연결 질문 추천, 답변 길이·첫마디까지 걸린 시간, 재면접(전체/메모한 질문만), 기록 복사·마크다운 받기, 제목 수정, 미업로드 녹음 자동 복구 |
 | 추가 | 설정 > 지원자 정보 프로필(여러 개, 기본값). 면접 시작은 목록 화면의 모달에서 프로필·면접관·질문·목소리·시간을 고른다. 재면접 링크는 `/interviews?start=1&from={id}[&only=noted]` |
-| 추가 | 질문 API 토큰 발급·폐기(설정 > API 토큰, 해시만 저장), 로그인 없이 열리는 API 문서(`/api-docs`, AI용 마크다운 `/api/v1/docs`·`/llms.txt`), 일괄 추가(`POST /api/v1/questions/bulk`), 태그 목록(`/api/v1/tags`) |
+| 추가 | API 토큰 발급·폐기(설정 > API 토큰, 해시만 저장), 로그인 없이 열리는 API 문서(`/api-docs`, AI용 마크다운 `/api/v1/docs`·`/llms.txt`), 일괄 추가(`POST /api/v1/questions/bulk`), 태그 목록(`/api/v1/tags`) |
+| 추가 | 프롬프트·평가 기준 API(`/api/v1/prompts`, `/api/v1/rubrics` CRUD, `isDefault: true`로 기본값 지정, `/api/v1/voices` 목소리 목록). 질문 API와 같은 토큰을 쓴다 |
 | M6 | 서버 쪽 비용 상한(최대 시간+2분 hangup, 종료 시 hangup, 살아 있는 통화 재접속 거부), cron 가드, 방치 면접 정리, 연결 끊김 안내, 오류·404·로딩 화면, 삭제 시 Blob 정리 |
 | 추가 | 면접 일시정지·재개(R-10): 통화를 끝내고 누적 시간·질문 번호·녹음 구간을 저장, 이어하기 때 새 통화에 이전 대화를 주입. 연결 끊김도 일시정지로 처리 |
 | 추가 | 계정: 누구나 이메일·비밀번호로 회원가입(`/signup`), 비밀번호는 scrypt 해시. 질문·프롬프트·지원자 정보·평가 기준·면접·API 토큰·OpenAI 키는 계정별로 분리. 계정 기능 이전 데이터와 키는 **첫 가입자**가 넘겨받는다 |
@@ -56,12 +57,15 @@ npm run dev
 | 새로고침으로 다시 연결 시도 | 이전 통화를 끊고 409. 화면에서 일시정지로 정리한 뒤 [이어하기]로 새 통화를 연다 (R-10) |
 | 그래도 남는 위험 | OpenAI 프로젝트 월 예산 한도 |
 
-## 질문 API (AI·스킬용)
+## 공개 API (AI·스킬용)
 
 전체 설명은 앱의 `/api-docs`(AI에게는 `/api/v1/docs` 또는 `/llms.txt` 마크다운)에 있다. 원문은 `src/lib/api-docs.ts` 한 곳이니 API를 바꾸면 같이 고친다.
 
-- 인증: `Authorization: Bearer <토큰>`. 토큰은 **설정 > API 토큰**에서 발급한다(만료 30일/90일/1년/없음, 원문은 발급 직후 한 번만 표시, DB엔 SHA-256 해시만 저장). 토큰은 발급한 계정의 질문만 다룬다.
-- 엔드포인트: `GET/POST /api/v1/questions`, `POST /api/v1/questions/bulk`(최대 100개, 전부 아니면 전무), `GET/PATCH/DELETE /api/v1/questions/{id}`, `GET /api/v1/categories`, `GET /api/v1/tags`
+- 인증: `Authorization: Bearer <토큰>`. 토큰은 **설정 > API 토큰**에서 발급한다(만료 30일/90일/1년/없음, 원문은 발급 직후 한 번만 표시, DB엔 SHA-256 해시만 저장). 토큰은 발급한 계정의 데이터만 다룬다.
+- 예상 질문: `GET/POST /api/v1/questions`, `POST /api/v1/questions/bulk`(최대 100개, 전부 아니면 전무), `GET/PATCH/DELETE /api/v1/questions/{id}`, `GET /api/v1/categories`, `GET /api/v1/tags`
+- 프롬프트: `GET/POST /api/v1/prompts`, `GET/PATCH/DELETE /api/v1/prompts/{id}`, `GET /api/v1/voices`. 생성은 `name`·`content`만 필수, 나머지는 기본값
+- 평가 기준: `GET/POST /api/v1/rubrics`, `GET/PATCH/DELETE /api/v1/rubrics/{id}`. `criteria`는 배열 전체 교체
+- 프롬프트·평가 기준은 `PATCH`/`POST`에 `isDefault: true`를 보내 기본값으로 올린다(`false`는 거부). 첫 번째로 만든 것은 자동으로 기본값
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/questions?q=지원동기&limit=20"
@@ -83,7 +87,7 @@ src/
   server/evaluations.ts        OpenAI Responses API(JSON 스키마 고정)로 루브릭 평가 — 면접당 하나, 덮어쓰기
   lib/evaluation.ts            답변을 질문별로 묶기, 평가 프롬프트·출력 스키마, 결과 정규화, 항목 평균, 루브릭 시드
   lib/brand.ts                 서비스명·한 줄 설명 (사이드바 로고, 탭 제목, 로그인 화면이 여기서 읽음)
-  lib/api-docs.ts              질문 API 설명서 원문 (/api-docs, /api/v1/docs, /llms.txt 공용)
+  lib/api-docs.ts              공개 API 설명서 원문 (/api-docs, /api/v1/docs, /llms.txt 공용)
   lib/realtime/turn-tracker.ts Realtime 이벤트 → 턴 조립 (녹음 기준 시계, 끊김 표시, 응답 지연)
   lib/realtime/interview-session.ts  WebRTC 연결·녹음·타이머·종료 처리
   lib/recorder/                혼합 녹음, IndexedDB 조각, webm 탐색 보정(ts-ebml), Blob 업로드

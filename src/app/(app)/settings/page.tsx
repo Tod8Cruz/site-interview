@@ -67,13 +67,15 @@ export default async function SettingsPage() {
         )}
       </section>
       <section className="mt-10">
-        <div className="mb-3">
-          <h2 className="font-semibold">API 토큰</h2>
-          <p className="text-sm text-muted">
-            AI나 스크립트가 예상 질문을 읽고 추가·수정·삭제할 때 씁니다. 사용법은{" "}
-            <a href="/api-docs" target="_blank" className="text-primary underline">API 문서</a>
-            (AI용 마크다운: <code className="rounded bg-surface-2 px-1 text-xs">{origin}/api/v1/docs</code>)에 있습니다.
-          </p>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="font-semibold">API 토큰</h2>
+            <p className="text-sm text-muted">
+              AI나 스크립트가 예상 질문·프롬프트·평가 기준을 읽고 추가·수정·삭제할 때 씁니다.
+              AI용 마크다운: <code className="rounded bg-surface-2 px-1 text-xs">{origin}/api/v1/docs</code>
+            </p>
+          </div>
+          <a href="/api-docs" target="_blank" rel="noopener" className="btn">문서 보기</a>
         </div>
         <ApiTokens origin={origin} tokens={tokens} />
       </section>

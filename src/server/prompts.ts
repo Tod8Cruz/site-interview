@@ -3,7 +3,12 @@ import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { prompts } from "@/db/schema";
 import { SEED_PROMPTS } from "@/lib/prompt-template";
-import { promptSchema, type PromptInput } from "@/lib/validation";
+import {
+  promptCreateSchema,
+  promptUpdateSchema,
+  type PromptCreateInput,
+  type PromptUpdateInput,
+} from "@/lib/validation";
 
 const mine = (userId: string) => eq(prompts.userId, userId);
 const owned = (userId: string, id: string) => and(mine(userId), eq(prompts.id, id));
@@ -28,16 +33,30 @@ export async function getPrompt(userId: string, id: string) {
   return row ?? null;
 }
 
-export async function createPrompt(userId: string, input: PromptInput) {
-  const data = promptSchema.parse(input);
-  const [row] = await db.insert(prompts).values({ ...data, userId }).returning();
+/** 첫 프롬프트는 자동으로 기본값이 된다. isDefault: true면 기존 기본값을 내리고 이것을 올린다. */
+export async function createPrompt(userId: string, input: PromptCreateInput) {
+  const { isDefault, ...data } = promptCreateSchema.parse(input);
+  const [existing] = await db.select({ id: prompts.id }).from(prompts).where(mine(userId)).limit(1);
+  const [row] = await db
+    .insert(prompts)
+    .values({ ...data, userId, isDefault: !existing })
+    .returning();
+  if (isDefault && existing) {
+    await setDefaultPrompt(userId, row.id);
+    return (await getPrompt(userId, row.id)) ?? row;
+  }
   return row;
 }
 
-export async function updatePrompt(userId: string, id: string, input: PromptInput) {
-  const data = promptSchema.parse(input);
-  const [row] = await db.update(prompts).set(data).where(owned(userId, id)).returning();
-  return row ?? null;
+/** 보낸 필드만 바꾼다(UI 폼은 전체를 보낸다). isDefault: true면 기본값으로 올린다. */
+export async function updatePrompt(userId: string, id: string, input: PromptUpdateInput) {
+  const { isDefault, ...data } = promptUpdateSchema.parse(input);
+  if (Object.keys(data).length > 0) {
+    const [row] = await db.update(prompts).set(data).where(owned(userId, id)).returning({ id: prompts.id });
+    if (!row) return null;
+  }
+  if (isDefault) await setDefaultPrompt(userId, id);
+  return getPrompt(userId, id);
 }
 
 export async function setDefaultPrompt(userId: string, id: string) {

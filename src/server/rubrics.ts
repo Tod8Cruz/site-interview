@@ -4,7 +4,12 @@ import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { evaluationRubrics } from "@/db/schema";
 import { SEED_RUBRICS } from "@/lib/evaluation";
-import { rubricSchema, type RubricInput } from "@/lib/validation";
+import {
+  rubricCreateSchema,
+  rubricUpdateSchema,
+  type RubricCreateInput,
+  type RubricUpdateInput,
+} from "@/lib/validation";
 
 const mine = (userId: string) => eq(evaluationRubrics.userId, userId);
 const owned = (userId: string, id: string) => and(mine(userId), eq(evaluationRubrics.id, id));
@@ -41,16 +46,34 @@ export async function getDefaultRubric(userId: string) {
   return row ?? null;
 }
 
-export async function createRubric(userId: string, input: RubricInput) {
-  const data = rubricSchema.parse(input);
-  const [row] = await db.insert(evaluationRubrics).values({ ...data, userId }).returning();
+/** 첫 평가 기준은 자동으로 기본값이 된다. isDefault: true면 기존 기본값을 내리고 이것을 올린다. */
+export async function createRubric(userId: string, input: RubricCreateInput) {
+  const { isDefault, ...data } = rubricCreateSchema.parse(input);
+  const [existing] = await db.select({ id: evaluationRubrics.id }).from(evaluationRubrics).where(mine(userId)).limit(1);
+  const [row] = await db
+    .insert(evaluationRubrics)
+    .values({ ...data, userId, isDefault: !existing })
+    .returning();
+  if (isDefault && existing) {
+    await setDefaultRubric(userId, row.id);
+    return (await getRubric(userId, row.id)) ?? row;
+  }
   return row;
 }
 
-export async function updateRubric(userId: string, id: string, input: RubricInput) {
-  const data = rubricSchema.parse(input);
-  const [row] = await db.update(evaluationRubrics).set(data).where(owned(userId, id)).returning();
-  return row ?? null;
+/** 보낸 필드만 바꾼다(UI 폼은 전체를 보낸다). criteria는 배열 전체를 바꾼다. isDefault: true면 기본값으로 올린다. */
+export async function updateRubric(userId: string, id: string, input: RubricUpdateInput) {
+  const { isDefault, ...data } = rubricUpdateSchema.parse(input);
+  if (Object.keys(data).length > 0) {
+    const [row] = await db
+      .update(evaluationRubrics)
+      .set(data)
+      .where(owned(userId, id))
+      .returning({ id: evaluationRubrics.id });
+    if (!row) return null;
+  }
+  if (isDefault) await setDefaultRubric(userId, id);
+  return getRubric(userId, id);
 }
 
 export async function setDefaultRubric(userId: string, id: string) {

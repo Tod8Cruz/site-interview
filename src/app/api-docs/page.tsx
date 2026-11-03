@@ -3,7 +3,7 @@ import { Markdown } from "@/components/markdown";
 import { apiDocsMarkdown } from "@/lib/api-docs";
 import { requestOrigin } from "@/server/origin";
 
-export const metadata: Metadata = { title: "질문 API 문서 — 모의 면접" };
+export const metadata: Metadata = { title: "API 문서 — 모의 면접" };
 
 /** 로그인 없이 열리는 API 설명 페이지 (사람·AI 공용). */
 export default async function ApiDocsPage() {
@@ -15,7 +15,7 @@ export default async function ApiDocsPage() {
         <a href="/llms.txt" className="text-primary underline">/llms.txt</a>
       </p>
       <article className="api-docs">
-        <Markdown>{apiDocsMarkdown(origin)}</Markdown>
+        <Markdown anchors>{apiDocsMarkdown(origin)}</Markdown>
       </article>
     </main>
   );

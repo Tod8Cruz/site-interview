@@ -37,7 +37,7 @@ export function ApiTokens({ tokens, origin }: { tokens: ApiTokenRow[]; origin: s
   const [state, action, pending] = useActionState<ApiTokenFormState, FormData>(issueApiToken, {});
   const docsUrl = `${origin}/api/v1/docs`;
   const aiInstructions = state.token
-    ? `모의 면접 사이트의 예상 질문 API를 사용해 줘.\n- API 문서: ${docsUrl} (먼저 읽고 문서대로 호출)\n- 인증 헤더: Authorization: Bearer ${state.token}`
+    ? `모의 면접 사이트의 API(예상 질문·프롬프트·평가 기준)를 사용해 줘.\n- API 문서: ${docsUrl} (먼저 읽고 문서대로 호출)\n- 인증 헤더: Authorization: Bearer ${state.token}`
     : "";
 
   return (
