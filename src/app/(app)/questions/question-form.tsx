@@ -2,15 +2,32 @@
 
 import Link from "next/link";
 import { useActionState } from "react";
-import type { Question } from "@/db/schema";
+import type { Question, QuestionGroup } from "@/db/schema";
 import { removeQuestion, saveQuestion, type QuestionFormState } from "./actions";
 
-export function QuestionForm({ question, categories }: { question?: Question; categories: string[] }) {
+type Props = {
+  question?: Question;
+  categories: string[];
+  groups: QuestionGroup[];
+  /** 새 질문의 그룹. 질문 목록에서 보던 그룹이 넘어온다. */
+  initialGroupId?: string;
+};
+
+export function QuestionForm({ question, categories, groups, initialGroupId }: Props) {
   const save = saveQuestion.bind(null, question?.id ?? null);
   const [state, action, pending] = useActionState<QuestionFormState, FormData>(save, {});
 
   return (
     <form action={action} className="card space-y-4 p-5">
+      <div>
+        <label className="label" htmlFor="groupId">그룹</label>
+        <select id="groupId" name="groupId" className="input"
+          defaultValue={question?.groupId ?? initialGroupId ?? groups.find((g) => g.isDefault)?.id}>
+          {groups.map((g) => (
+            <option key={g.id} value={g.id}>{g.name}{g.isDefault ? " (기본)" : ""}</option>
+          ))}
+        </select>
+      </div>
       <div>
         <label className="label" htmlFor="question">질문</label>
         <textarea id="question" name="question" required rows={2} maxLength={1000}

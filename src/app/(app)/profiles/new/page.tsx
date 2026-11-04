@@ -1,5 +1,5 @@
 import { PageHeader } from "@/components/page-header";
-import { ProfileForm } from "../../profile-form";
+import { ProfileForm } from "../profile-form";
 
 export default function NewProfilePage() {
   return (

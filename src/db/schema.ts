@@ -37,11 +37,27 @@ export const users = pgTable("users", {
  */
 const owner = () => uuid("user_id").references(() => users.id, { onDelete: "cascade" });
 
+/** 예상 질문 묶음. 질문은 하나의 그룹에 속하고, 면접을 시작할 때 그룹을 고른다. 기본 그룹은 지울 수 없다. */
+export const questionGroups = pgTable(
+  "question_groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: owner(),
+    name: text("name").notNull(),
+    isDefault: boolean("is_default").notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("question_groups_single_default").on(t.userId).where(sql`${t.isDefault}`)],
+);
+
 export const questions = pgTable(
   "questions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     userId: owner(),
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => questionGroups.id),
     question: text("question").notNull(),
     modelAnswer: text("model_answer").notNull().default(""),
     category: text("category"),
@@ -49,7 +65,7 @@ export const questions = pgTable(
     sortOrder: integer("sort_order").notNull().default(0),
     ...timestamps,
   },
-  (t) => [index("questions_user_idx").on(t.userId)],
+  (t) => [index("questions_user_idx").on(t.userId), index("questions_group_idx").on(t.groupId)],
 );
 
 export type TurnDetectionType = "semantic_vad" | "server_vad";
@@ -80,7 +96,7 @@ export type TurnDetectionSnapshot = {
   silenceMs: number;
 };
 
-/** 지원자 정보 프로필 — 설정에서 관리하고 면접 시작 시 골라 {{context}}로 쓴다. */
+/** 지원자 정보 프로필 — 지원자 정보 메뉴에서 관리하고 면접 시작 시 골라 {{context}}로 쓴다. */
 export const candidateProfiles = pgTable(
   "candidate_profiles",
   {
@@ -262,6 +278,7 @@ export const appSettings = pgTable("app_settings", {
 });
 
 export type User = typeof users.$inferSelect;
+export type QuestionGroup = typeof questionGroups.$inferSelect;
 export type Question = typeof questions.$inferSelect;
 export type Prompt = typeof prompts.$inferSelect;
 export type CandidateProfile = typeof candidateProfiles.$inferSelect;

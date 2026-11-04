@@ -11,7 +11,7 @@ export function apiDocsMarkdown(origin: string) {
   const base = `${origin}/api/v1`;
   return `# 모의 면접 — API 문서
 
-예상 질문(모범 답변), 면접관 프롬프트, 평가 기준을 조회·추가·수정·삭제하는 REST API입니다.
+예상 질문(모범 답변)과 질문 그룹, 면접관 프롬프트, 평가 기준을 조회·추가·수정·삭제하는 REST API입니다.
 AI 에이전트가 이 문서만 읽고 바로 호출할 수 있도록 작성했습니다.
 
 - Base URL: \`${base}\`
@@ -25,6 +25,9 @@ AI 에이전트가 이 문서만 읽고 바로 호출할 수 있도록 작성했
   - ${a("데이터 모델: Question", "Question 모델")}
   - ${a("GET /questions — 목록·검색", "GET /questions")} · ${a("GET /questions/{id} — 하나 조회", "GET /questions/{id}")} · ${a("POST /questions — 하나 추가", "POST /questions")} · ${a("POST /questions/bulk — 여러 개 한꺼번에 추가", "POST /questions/bulk")} · ${a("PATCH /questions/{id} — 일부 수정", "PATCH /questions/{id}")} · ${a("DELETE /questions/{id} — 삭제", "DELETE /questions/{id}")}
   - ${a("GET /categories — 쓰고 있는 카테고리 목록", "GET /categories")} · ${a("GET /tags — 쓰고 있는 태그 목록", "GET /tags")}
+- ${a("질문 그룹")} — 예상 질문 묶음. 면접을 시작할 때 그룹을 고른다
+  - ${a("데이터 모델: QuestionGroup", "QuestionGroup 모델")}
+  - ${a("GET /question-groups — 목록", "GET /question-groups")} · ${a("GET /question-groups/{id} — 하나 조회", "GET /question-groups/{id}")} · ${a("POST /question-groups — 추가", "POST /question-groups")} · ${a("PATCH /question-groups/{id} — 일부 수정", "PATCH /question-groups/{id}")} · ${a("DELETE /question-groups/{id} — 삭제", "DELETE /question-groups/{id}")}
 - ${a("프롬프트 (면접관 설정)", "프롬프트")} — 면접관의 성격·진행 규칙과 목소리·시간·말 차례 설정
   - ${a("데이터 모델: Prompt", "Prompt 모델")}
   - ${a("GET /prompts — 목록", "GET /prompts")} · ${a("GET /prompts/{id} — 하나 조회", "GET /prompts/{id}")} · ${a("POST /prompts — 추가", "POST /prompts")} · ${a("PATCH /prompts/{id} — 일부 수정", "PATCH /prompts/{id}")} · ${a("DELETE /prompts/{id} — 삭제", "DELETE /prompts/{id}")}
@@ -49,7 +52,7 @@ Authorization: Bearer mi_xxxxxxxxxxxxxxxx
 - \`PATCH\`는 보낸 필드만 바꿉니다. 최소 한 필드가 필요합니다. 배열 필드(\`tags\`, \`criteria\`)는 배열 전체를 바꿉니다(추가가 아님).
 - \`DELETE\`는 \`204\`(본문 없음)를 돌려주고 되돌릴 수 없습니다.
 - 없는 id, 다른 계정의 id, uuid가 아닌 값은 모두 \`404 not_found\`입니다.
-- 프롬프트와 평가 기준은 계정마다 **기본값이 하나** 있습니다. \`isDefault: true\`를 보내면 그것이 기본값이 되고 기존 기본값은 해제됩니다. \`false\`는 보낼 수 없습니다(해제하려면 다른 것을 기본값으로). 기본값을 지우면 남은 것 중 가장 오래된 것이 기본값이 됩니다.
+- 질문 그룹, 프롬프트, 평가 기준은 계정마다 **기본값이 하나** 있습니다. \`isDefault: true\`를 보내면 그것이 기본값이 되고 기존 기본값은 해제됩니다. \`false\`는 보낼 수 없습니다(해제하려면 다른 것을 기본값으로). 프롬프트·평가 기준은 기본값을 지우면 남은 것 중 가장 오래된 것이 기본값이 되고, 기본 질문 그룹은 지울 수 없습니다.
 
 ---
 
@@ -60,6 +63,7 @@ Authorization: Bearer mi_xxxxxxxxxxxxxxxx
 | 필드 | 타입 | 설명 |
 |------|------|------|
 | \`id\` | string (uuid) | 읽기 전용 |
+| \`groupId\` | string (uuid) | 속한 ${a("질문 그룹")}. 만들 때 생략하면 기본 그룹 |
 | \`question\` | string, 1~1000자 | 면접 질문 (필수) |
 | \`modelAnswer\` | string, 최대 20000자 | 모범 답변. 마크다운 가능. 기본값 \`""\` |
 | \`category\` | string \\| null, 최대 100자 | 예: \`인성\`, \`직무\`, \`지원동기\`. 빈 문자열은 \`null\`로 저장 |
@@ -75,6 +79,7 @@ Authorization: Bearer mi_xxxxxxxxxxxxxxxx
 
 | 이름 | 설명 |
 |------|------|
+| \`groupId\` | 이 그룹의 질문만 |
 | \`q\` | 질문과 모범 답변에서 부분 일치 검색 (대소문자 무시) |
 | \`category\` | 카테고리 정확히 일치 |
 | \`tag\` | 이 태그를 가진 질문 |
@@ -92,6 +97,7 @@ curl -H "Authorization: Bearer $TOKEN" "${base}/questions?q=지원동기&limit=2
   "items": [
     {
       "id": "3f1c…",
+      "groupId": "9a2e…",
       "question": "우리 회사에 지원한 동기는 무엇인가요?",
       "modelAnswer": "…",
       "category": "지원동기",
@@ -121,11 +127,11 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
   -d '{"question":"본인의 강점은?","modelAnswer":"…","category":"인성","tags":["공채"]}'
 \`\`\`
 
-응답 \`201\`: 만든 Question.
+응답 \`201\`: 만든 Question. \`groupId\`를 생략하면 기본 그룹에 들어가고, 없는 그룹이면 \`400 bad_request\`입니다.
 
 ### POST /questions/bulk — 여러 개 한꺼번에 추가
 
-한 번에 최대 100개. 하나라도 검증에 실패하면 아무것도 저장하지 않습니다.
+한 번에 최대 100개. 항목마다 \`groupId\`를 줄 수 있습니다(생략하면 기본 그룹). 하나라도 검증에 실패하면 아무것도 저장하지 않습니다.
 
 \`\`\`bash
 curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
@@ -144,6 +150,8 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/js
   "${base}/questions/{id}" -d '{"modelAnswer":"고친 답변"}'
 \`\`\`
 
+다른 그룹으로 옮기려면 \`{"groupId":"…"}\`를 보냅니다.
+
 응답 \`200\`: 수정된 Question. 없으면 \`404\`.
 
 ### DELETE /questions/{id} — 삭제
@@ -157,6 +165,47 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/js
 ### GET /tags — 쓰고 있는 태그 목록
 
 응답 \`200\`: \`{ "items": ["공채", "삼성", …] }\`
+
+---
+
+# 질문 그룹
+
+예상 질문을 지원처·면접 종류별로 묶습니다. 질문은 그룹 하나에 속하고, 면접을 시작할 때 그룹을 고른 뒤 그 안에서 전체·직접 고르기·무작위로 질문을 정합니다.
+
+## 데이터 모델: QuestionGroup
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| \`id\` | string (uuid) | 읽기 전용 |
+| \`name\` | string, 1~100자 | 그룹 이름 (필수). 예: \`○○전자 공채\` |
+| \`isDefault\` | boolean | 기본 그룹인지. 면접 시작 때 처음 선택되고, \`groupId\` 없이 만든 질문이 들어갑니다. 쓰기는 \`true\`만 가능 |
+| \`questionCount\` | integer | 목록 응답에만. 그룹의 질문 수 |
+| \`createdAt\` / \`updatedAt\` | string (ISO 8601) | 읽기 전용 |
+
+### GET /question-groups — 목록
+
+응답 \`200\`: \`{ "items": [QuestionGroup, …] }\`. 기본 그룹이 맨 앞, 나머지는 만든 순서입니다. 그룹이 하나도 없는 계정이면 \`기본\` 그룹이 먼저 만들어집니다.
+
+### GET /question-groups/{id} — 하나 조회
+
+응답 \`200\`: QuestionGroup(\`questionCount\` 없음). 없으면 \`404\`.
+
+### POST /question-groups — 추가
+
+\`\`\`bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
+  "${base}/question-groups" -d '{"name":"○○교대 면접"}'
+\`\`\`
+
+응답 \`201\`: 만든 QuestionGroup. 만든 뒤 질문을 넣으려면 \`POST /questions\`(또는 \`/questions/bulk\`)에 \`groupId\`를 주세요.
+
+### PATCH /question-groups/{id} — 일부 수정
+
+\`name\`, \`isDefault\`(\`true\`만). 응답 \`200\`: 수정된 QuestionGroup. 없으면 \`404\`.
+
+### DELETE /question-groups/{id} — 삭제
+
+그룹에 있던 질문은 지워지지 않고 기본 그룹으로 옮겨집니다. 응답 \`204\`. 없으면 \`404\`, 기본 그룹이면 \`400 bad_request\`(다른 그룹을 기본값으로 바꾼 뒤 지우세요).
 
 ---
 
@@ -312,7 +361,7 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/js
 | HTTP | code | 뜻 |
 |------|------|----|
 | 400 | \`validation_error\` | 필드 값이 규칙에 맞지 않음. \`message\`에 필드 경로와 이유 |
-| 400 | \`bad_request\` | 본문이 올바른 JSON이 아님 |
+| 400 | \`bad_request\` | 본문이 올바른 JSON이 아님, 없는 질문 그룹 지정, 기본 질문 그룹 삭제 |
 | 401 | \`unauthorized\` | 토큰 없음·틀림·만료 |
 | 404 | \`not_found\` | 해당 id의 리소스 없음 |
 | 405 | — | 지원하지 않는 메서드 |
@@ -323,6 +372,7 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/js
 - 질문을 추가하기 전에 \`GET /questions?q=핵심어\`로 비슷한 질문이 이미 있는지 확인하고, 있으면 새로 만들지 말고 \`PATCH\`로 보완하세요.
 - 카테고리와 태그는 자유 문자열입니다. 새로 만들기 전에 \`GET /categories\`, \`GET /tags\`로 기존 이름을 확인해 표기를 맞추세요.
 - 여러 질문을 넣을 때는 \`POST /questions/bulk\`를 쓰세요.
+- 특정 지원처·면접용 질문을 만들 때는 \`GET /question-groups\`로 맞는 그룹이 있는지 보고, 없으면 그룹을 만든 뒤 \`groupId\`를 붙여 넣으세요. 사용자가 그룹을 말하지 않았으면 기본 그룹(생략)에 넣으면 됩니다.
 - \`modelAnswer\`는 지원자가 소리 내어 말할 답변입니다. 1분(약 300~400자) 안팎, 두괄식, 구체적 경험 위주가 좋습니다.
 - 프롬프트를 만들 때는 먼저 \`GET /prompts\`로 기존 시드의 \`content\`를 읽어 형식(인사 → 질문 순서 → 꼬리질문 규칙 → 마무리)을 참고하세요. \`{{context}}\`와 \`{{questions}}\`는 꼭 넣으세요. 음성 대화이므로 짧게 묻고, 한 번에 한 질문만 하도록 지시하세요.
 - 평가 기준의 \`description\`은 채점 AI가 그대로 읽습니다. "~했는가" 형태의 판단 질문으로, 무엇이 높은 점수인지 드러나게 쓰세요. 모범답변과 얼마나 같은지는 보상하지 않는 것이 이 서비스의 원칙입니다.

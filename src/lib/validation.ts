@@ -13,6 +13,8 @@ const tags = z
   .transform((list) => Array.from(new Set(list)));
 
 export const questionCreateSchema = z.object({
+  /** 비우면 기본 그룹에 들어간다. */
+  groupId: z.uuid().optional(),
   question: z.string().trim().min(1, "질문을 입력하세요.").max(1000),
   modelAnswer: z.string().max(20000).default(""),
   category: optionalCategory,
@@ -22,6 +24,7 @@ export const questionCreateSchema = z.object({
 
 export const questionUpdateSchema = z
   .object({
+    groupId: z.uuid(),
     question: z.string().trim().min(1, "질문을 입력하세요.").max(1000),
     modelAnswer: z.string().max(20000),
     category: optionalCategory,
@@ -42,12 +45,30 @@ export const questionBulkCreateSchema = z.object({
 export type QuestionBulkCreateInput = z.input<typeof questionBulkCreateSchema>;
 
 export const questionListQuerySchema = z.object({
+  groupId: z.uuid().optional(),
   q: z.string().trim().optional(),
   category: z.string().trim().optional(),
   tag: z.string().trim().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
+
+export const questionGroupSchema = z.object({
+  name: z.string().trim().min(1, "그룹 이름을 입력하세요.").max(100),
+});
+
+/** 그룹 생성. isDefault: true면 만든 뒤 기본 그룹으로 올린다. */
+export const questionGroupCreateSchema = questionGroupSchema.extend({ isDefault: z.boolean().default(false) });
+
+export type QuestionGroupCreateInput = z.input<typeof questionGroupCreateSchema>;
+
+/** 그룹 수정. isDefault는 true로만 바꿀 수 있다(해제는 다른 그룹을 기본값으로). */
+export const questionGroupUpdateSchema = questionGroupSchema
+  .extend({ isDefault: z.literal(true, "isDefault는 true만 보낼 수 있습니다. 기본 그룹을 바꾸려면 다른 그룹에 true를 보내세요.") })
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, "수정할 필드가 없습니다.");
+
+export type QuestionGroupUpdateInput = z.input<typeof questionGroupUpdateSchema>;
 
 export const VOICES = [
   "alloy",

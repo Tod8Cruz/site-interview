@@ -8,8 +8,9 @@ type Item = { href: string; label: string };
 /** 맨 위: 모의 면접. 가운데: 면접 설정 섹션. 맨 아래: 설정. */
 const TOP: Item[] = [{ href: "/interviews", label: "모의 면접" }];
 const SETUP: Item[] = [
+  { href: "/profiles", label: "지원자 정보" },
   { href: "/questions", label: "예상 질문" },
-  { href: "/prompts", label: "프롬프트" },
+  { href: "/prompts", label: "면접관 설정" },
   { href: "/rubrics", label: "평가 기준" },
 ];
 const BOTTOM: Item[] = [{ href: "/settings", label: "설정" }];

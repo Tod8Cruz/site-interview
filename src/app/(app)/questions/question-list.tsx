@@ -8,7 +8,8 @@ import type { Question } from "@/db/schema";
 /** 이 길이를 넘는 모범답안은 접어 두고 "더 보기"로 펼친다. */
 const COLLAPSE_CHARS = 400;
 
-export function QuestionList({ questions }: { questions: Question[] }) {
+/** groupName은 전체 보기에서만 채운다(그룹 하나를 볼 때는 칩이 중복이라). */
+export function QuestionList({ questions }: { questions: (Question & { groupName: string | null })[] }) {
   const [hideAnswers, setHideAnswers] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
@@ -58,8 +59,9 @@ export function QuestionList({ questions }: { questions: Question[] }) {
               <li key={q.id} className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] md:gap-4">
                 <div className="min-w-0">
                   <p className="font-medium">{q.question}</p>
-                  {(q.category || q.tags.length > 0) && (
+                  {(q.groupName || q.category || q.tags.length > 0) && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
+                      {q.groupName && <span className="chip bg-primary/10 text-primary">{q.groupName}</span>}
                       {q.category && <span className="chip">{q.category}</span>}
                       {q.tags.map((t) => <span key={t} className="chip">#{t}</span>)}
                     </div>

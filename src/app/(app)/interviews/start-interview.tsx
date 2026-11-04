@@ -9,8 +9,9 @@ import { VoiceOptions } from "@/components/voice-options";
 import { VoicePreviewButton } from "@/components/voice-preview-button";
 import { AudioDeviceCheck } from "@/components/audio-device-check";
 
-type QuestionOption = { id: string; question: string; category: string | null };
-type Mode = "all" | "category" | "manual" | "random";
+type QuestionOption = { id: string; groupId: string; question: string; category: string | null };
+type GroupOption = { id: string; name: string; isDefault: boolean };
+type Mode = "all" | "manual" | "random";
 
 export type StartPrefill = {
   sourceInterviewId: string;
@@ -24,6 +25,7 @@ export type StartPrefill = {
 type Props = {
   prompts: Prompt[];
   profiles: CandidateProfile[];
+  groups: GroupOption[];
   questions: QuestionOption[];
   prefill: StartPrefill | null;
   autoOpen: boolean;
@@ -85,7 +87,8 @@ export function StartInterview({ autoOpen, label = "면접 시작", className = 
 function StartForm({
   prompts,
   profiles,
-  questions,
+  groups,
+  questions: allQuestions,
   prefill,
   open,
   onCancel,
@@ -104,18 +107,24 @@ function StartForm({
   const prompt = prompts.find((p) => p.id === promptId);
   const [voice, setVoice] = useState(defaultPrompt?.voice ?? "marin");
   const [maxMinutes, setMaxMinutes] = useState(defaultPrompt?.maxMinutes ?? 20);
+  // 다시 면접할 때는 원래 질문이 들어 있는 그룹을 고른다.
+  const prefillGroupId = allQuestions.find((q) => q.id === prefill?.questionIds[0])?.groupId;
+  const [groupId, setGroupId] = useState(
+    prefillGroupId ?? groups.find((g) => g.isDefault)?.id ?? groups[0]?.id ?? "",
+  );
+  const questions = useMemo(() => allQuestions.filter((q) => q.groupId === groupId), [allQuestions, groupId]);
   const [mode, setMode] = useState<Mode>(prefill ? "manual" : "all");
-  const [category, setCategory] = useState("");
   const [randomCount, setRandomCount] = useState(5);
   const [manual, setManual] = useState<Set<string>>(new Set(prefill?.questionIds ?? []));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflictId, setConflictId] = useState<string | null>(null);
 
-  const categories = useMemo(
-    () => Array.from(new Set(questions.map((q) => q.category).filter((c): c is string => Boolean(c)))).sort(),
-    [questions],
-  );
+  const pickGroup = (id: string) => {
+    setGroupId(id);
+    // 직접 고른 질문은 그룹마다 따로라 그룹을 바꾸면 비운다.
+    setManual(new Set());
+  };
 
   const pickPrompt = (id: string) => {
     setPromptId(id);
@@ -130,8 +139,6 @@ function StartForm({
     switch (mode) {
       case "all":
         return questions.map((q) => q.id);
-      case "category":
-        return questions.filter((q) => q.category === category).map((q) => q.id);
       case "manual":
         return questions.filter((q) => manual.has(q.id)).map((q) => q.id);
       case "random":
@@ -142,11 +149,9 @@ function StartForm({
   const previewCount =
     mode === "all"
       ? questions.length
-      : mode === "category"
-        ? questions.filter((q) => q.category === category).length
-        : mode === "manual"
-          ? manual.size
-          : Math.min(randomCount, questions.length);
+      : mode === "manual"
+        ? questions.filter((q) => manual.has(q.id)).length
+        : Math.min(randomCount, questions.length);
 
   async function start() {
     setSubmitting(true);
@@ -209,7 +214,7 @@ function StartForm({
             ? prefill.notedOnly
               ? `"${prefill.sourceTitle}"에서 메모한 질문 ${prefill.questionIds.length}개만 다시 연습합니다.`
               : `"${prefill.sourceTitle}"의 설정으로 다시 면접합니다.`
-            : "지원자 정보와 면접관, 질문을 고르세요."}
+            : "지원자 정보와 면접관, 질문 그룹을 고르세요."}
         </p>
       </header>
 
@@ -217,11 +222,11 @@ function StartForm({
         <section>
           <div className="mb-1 flex items-center justify-between">
             <label className="label mb-0" htmlFor="profile">지원자 정보</label>
-            <Link href="/settings" className="text-xs text-primary underline">설정에서 관리</Link>
+            <Link href="/profiles" className="text-xs text-primary underline">관리</Link>
           </div>
           {profiles.length === 0 ? (
             <p className="rounded-lg border border-dashed border-border p-3 text-sm text-muted">
-              저장된 지원자 정보가 없습니다. <Link href="/settings/profiles/new" className="text-primary underline">설정에서 추가</Link>하면
+              저장된 지원자 정보가 없습니다. <Link href="/profiles/new" className="text-primary underline">지원자 정보 메뉴에서 추가</Link>하면
               면접관이 그 내용으로 질문합니다. 없이도 시작할 수 있습니다.
             </p>
           ) : (
@@ -251,11 +256,20 @@ function StartForm({
         </section>
 
         <section>
-          <span className="label">질문</span>
-          <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="질문 고르는 방식">
+          <div className="mb-1 flex items-center justify-between">
+            <label className="label mb-0" htmlFor="questionGroup">질문 그룹</label>
+            <Link href="/questions/groups" className="text-xs text-primary underline">관리</Link>
+          </div>
+          <select id="questionGroup" value={groupId} onChange={(e) => pickGroup(e.target.value)} className="input">
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}{g.isDefault ? " (기본)" : ""} · {allQuestions.filter((q) => q.groupId === g.id).length}개
+              </option>
+            ))}
+          </select>
+          <div className="mt-3 flex flex-wrap gap-1.5" role="radiogroup" aria-label="질문 고르는 방식">
             {([
-              ["all", "전체"],
-              ["category", "카테고리"],
+              ["all", "전체 질문"],
               ["manual", "직접 고르기"],
               ["random", "무작위"],
             ] as const).map(([value, text]) => (
@@ -266,12 +280,6 @@ function StartForm({
             ))}
           </div>
           <div className="mt-3">
-            {mode === "category" && (
-              <select value={category} onChange={(e) => setCategory(e.target.value)} className="input" aria-label="카테고리">
-                <option value="">카테고리 선택</option>
-                {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            )}
             {mode === "random" && (
               <label className="flex items-center gap-2 text-sm">
                 <input type="number" min={1} max={Math.max(1, questions.length)} value={randomCount}
@@ -279,7 +287,7 @@ function StartForm({
                 개를 시작할 때 무작위로 뽑습니다.
               </label>
             )}
-            {mode === "manual" && (
+            {mode === "manual" && questions.length > 0 && (
               <ul className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-border p-2">
                 {questions.map((q) => (
                   <li key={q.id}>
@@ -299,7 +307,7 @@ function StartForm({
             )}
           </div>
           <p className="mt-2 text-xs text-muted">
-            {previewCount}개 질문 사용{questions.length === 0 && " — 질문이 없으면 면접관이 지원자 정보로 질문을 만듭니다."}
+            {previewCount}개 질문 사용{questions.length === 0 && " — 이 그룹에 질문이 없으면 면접관이 지원자 정보로 질문을 만듭니다."}
           </p>
         </section>
 
@@ -351,7 +359,7 @@ function StartForm({
         <button
           type="submit"
           className="btn btn-primary"
-          disabled={!supported || submitting || !promptId || (mode === "category" && !category)}
+          disabled={!supported || submitting || !promptId}
         >
           {submitting ? "준비 중…" : "면접 준비하기"}
         </button>

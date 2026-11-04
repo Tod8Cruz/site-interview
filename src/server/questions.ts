@@ -10,8 +10,10 @@ import {
   type QuestionCreateInput,
   type QuestionUpdateInput,
 } from "@/lib/validation";
+import { resolveGroupId } from "./question-groups";
 
 export type QuestionFilter = {
+  groupId?: string;
   q?: string;
   category?: string;
   tag?: string;
@@ -25,6 +27,7 @@ function escapeLike(value: string) {
 
 function whereFor(userId: string, filter: QuestionFilter) {
   const conditions = [eq(questions.userId, userId)];
+  if (filter.groupId) conditions.push(eq(questions.groupId, filter.groupId));
   if (filter.q) {
     const pattern = `%${escapeLike(filter.q)}%`;
     conditions.push(or(ilike(questions.question, pattern), ilike(questions.modelAnswer, pattern))!);
@@ -70,22 +73,31 @@ export async function getQuestion(userId: string, id: string) {
 }
 
 export async function createQuestion(userId: string, input: QuestionCreateInput) {
-  const data = questionCreateSchema.parse(input);
-  const [row] = await db.insert(questions).values({ ...data, userId }).returning();
+  const { groupId, ...data } = questionCreateSchema.parse(input);
+  const [row] = await db
+    .insert(questions)
+    .values({ ...data, userId, groupId: await resolveGroupId(userId, groupId) })
+    .returning();
   return row;
 }
 
 /** 전부 들어가거나 하나도 안 들어간다. 입력 순서대로 돌려준다. */
 export async function createQuestions(userId: string, input: QuestionBulkCreateInput) {
   const { items } = questionBulkCreateSchema.parse(input);
+  // 그룹은 항목마다 다를 수 있다. 하나라도 없는 그룹이면 아무것도 넣지 않는다.
+  const groupIds = new Map<string | undefined, string>();
+  for (const { groupId } of items) {
+    if (!groupIds.has(groupId)) groupIds.set(groupId, await resolveGroupId(userId, groupId));
+  }
   return db
     .insert(questions)
-    .values(items.map((item) => ({ ...item, userId })))
+    .values(items.map(({ groupId, ...item }) => ({ ...item, userId, groupId: groupIds.get(groupId)! })))
     .returning();
 }
 
 export async function updateQuestion(userId: string, id: string, input: QuestionUpdateInput) {
   const data = questionUpdateSchema.parse(input);
+  if (data.groupId) await resolveGroupId(userId, data.groupId);
   const [row] = await db.update(questions).set(data).where(owned(userId, id)).returning();
   return row ?? null;
 }

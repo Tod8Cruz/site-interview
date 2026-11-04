@@ -8,6 +8,7 @@ import {
   evaluationRubrics,
   interviews,
   prompts,
+  questionGroups,
   questions,
   users,
   userSettings,
@@ -39,7 +40,7 @@ export async function createUser(input: SignupInput) {
 
     const [{ others }] = await tx.select({ others: count() }).from(users).where(ne(users.id, user.id));
     if (others === 0) {
-      for (const table of [questions, prompts, candidateProfiles, evaluationRubrics, interviews, apiTokens]) {
+      for (const table of [questionGroups, questions, prompts, candidateProfiles, evaluationRubrics, interviews, apiTokens]) {
         await tx.update(table).set({ userId: user.id }).where(isNull(table.userId));
       }
       const legacy = await tx.select().from(appSettings);

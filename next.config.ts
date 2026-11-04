@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // 지원자 정보는 설정 화면에서 별도 메뉴로 옮겼다.
+  async redirects() {
+    return [{ source: "/settings/profiles/:path*", destination: "/profiles/:path*", permanent: true }];
+  },
   turbopack: {
     resolveAlias: {
       // ebml의 "browser" 엔트리는 전역 변수에 붙는 IIFE라 require 결과가 비어 있다.

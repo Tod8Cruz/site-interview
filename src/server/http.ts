@@ -7,6 +7,7 @@ import { findValidApiToken, touchApiToken } from "./api-tokens";
 import { currentUser } from "./auth";
 import { ConflictError, NotFoundError } from "./interviews";
 import { OpenAIError } from "./openai";
+import { QuestionGroupError } from "./question-groups";
 
 export function jsonError(status: number, code: string, message: string, extra?: Record<string, unknown>) {
   return NextResponse.json({ error: { code, message, ...extra } }, { status });
@@ -70,7 +71,9 @@ export const isUuid = (value: string) => z.uuid().safeParse(value).success;
 /** 서비스 계층 예외를 API 오류 형식(A-5)으로 바꾼다. */
 export function handleRouteError(error: unknown) {
   if (error instanceof z.ZodError) return jsonError(400, "validation_error", formatZodError(error));
-  if (error instanceof BadRequestError) return jsonError(400, "bad_request", error.message);
+  if (error instanceof BadRequestError || error instanceof QuestionGroupError) {
+    return jsonError(400, "bad_request", error.message);
+  }
   if (error instanceof NotFoundError) return jsonError(404, "not_found", error.message);
   if (error instanceof OpenAIError) return jsonError(502, "openai_error", error.message);
   if (error instanceof ConflictError) {

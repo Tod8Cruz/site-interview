@@ -7,6 +7,7 @@ import { isUuid } from "@/server/http";
 import { getInterview, getNotedQuestionIds, listInterviews } from "@/server/interviews";
 import { listProfiles } from "@/server/profiles";
 import { listPrompts } from "@/server/prompts";
+import { listQuestionGroups } from "@/server/question-groups";
 import { listQuestions } from "@/server/questions";
 import { DeleteInterviewButton } from "./delete-button";
 import { StartInterview, type StartPrefill } from "./start-interview";
@@ -39,17 +40,19 @@ export default async function InterviewsPage(props: PageProps<"/interviews">) {
   const { id: userId } = await requireUser();
   const { start, from, only } = await props.searchParams;
   const sourceId = typeof from === "string" && isUuid(from) ? from : null;
-  const [interviews, prompts, profiles, { items: questions }, prefill] = await Promise.all([
+  const [interviews, prompts, profiles, groups, { items: questions }, prefill] = await Promise.all([
     listInterviews(userId),
     listPrompts(userId),
     listProfiles(userId),
+    listQuestionGroups(userId),
     listQuestions(userId),
     loadPrefill(userId, sourceId, only === "noted"),
   ]);
   const startProps = {
     prompts,
     profiles,
-    questions: questions.map((q) => ({ id: q.id, question: q.question, category: q.category })),
+    groups: groups.map((g) => ({ id: g.id, name: g.name, isDefault: g.isDefault })),
+    questions: questions.map((q) => ({ id: q.id, groupId: q.groupId, question: q.question, category: q.category })),
     prefill,
     autoOpen: start === "1",
   };
@@ -65,7 +68,7 @@ export default async function InterviewsPage(props: PageProps<"/interviews">) {
           <p className="mb-3">아직 진행한 면접이 없습니다. 오른쪽 위의 <b>면접 시작</b>을 눌러 첫 모의 면접을 해 보세요.</p>
           {profiles.length === 0 && (
             <p className="mb-3">
-              먼저 <Link href="/settings/profiles/new" className="text-primary underline">설정에서 지원자 정보를 추가</Link>하면 면접관이 그 내용으로 질문합니다.
+              먼저 <Link href="/profiles/new" className="text-primary underline">지원자 정보를 추가</Link>하면 면접관이 그 내용으로 질문합니다.
             </p>
           )}
         </div>

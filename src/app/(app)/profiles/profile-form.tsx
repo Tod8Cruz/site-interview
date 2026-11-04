@@ -28,7 +28,7 @@ export function ProfileForm({ profile }: { profile?: CandidateProfile }) {
       {state.error && <p className="text-sm text-danger">{state.error}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <button type="submit" disabled={pending} className="btn btn-primary">{pending ? "저장 중…" : "저장"}</button>
-        <Link href="/settings" className="btn">취소</Link>
+        <Link href="/profiles" className="btn">취소</Link>
         {profile && (
           <button type="button" className="btn btn-danger ml-auto"
             onClick={async () => {

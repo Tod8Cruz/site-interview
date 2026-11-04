@@ -3,9 +3,9 @@ import { PageHeader } from "@/components/page-header";
 import { requireUser } from "@/server/auth";
 import { isUuid } from "@/server/http";
 import { getProfile } from "@/server/profiles";
-import { ProfileForm } from "../../profile-form";
+import { ProfileForm } from "../profile-form";
 
-export default async function EditProfilePage(props: PageProps<"/settings/profiles/[id]">) {
+export default async function EditProfilePage(props: PageProps<"/profiles/[id]">) {
   const { id } = await props.params;
   if (!isUuid(id)) notFound();
   const { id: userId } = await requireUser();
