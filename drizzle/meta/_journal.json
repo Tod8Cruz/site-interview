@@ -71,6 +71,13 @@
       "when": 1793757271050,
       "tag": "0009_question_groups",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793758231360,
+      "tag": "0010_drop_question_category_tags",
+      "breakpoints": true
     }
   ]
 }

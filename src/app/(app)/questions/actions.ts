@@ -11,16 +11,10 @@ import { createQuestion, deleteQuestion, updateQuestion } from "@/server/questio
 export type QuestionFormState = { error?: string };
 
 function fromForm(formData: FormData) {
-  const tags = String(formData.get("tags") ?? "")
-    .split(",")
-    .map((t) => t.trim())
-    .filter(Boolean);
   return {
     groupId: String(formData.get("groupId") ?? "") || undefined,
     question: String(formData.get("question") ?? ""),
     modelAnswer: String(formData.get("modelAnswer") ?? ""),
-    category: String(formData.get("category") ?? ""),
-    tags,
   };
 }
 
@@ -39,14 +33,15 @@ export async function saveQuestion(
     if (error instanceof QuestionGroupError) return { error: error.message };
     throw error;
   }
-  revalidatePath("/questions");
-  // 저장한 질문의 그룹 목록으로 돌아간다.
-  redirect(input.groupId ? `/questions?group=${input.groupId}` : "/questions");
+  revalidatePath("/questions", "layout");
+  // 저장한 질문의 그룹 화면으로 돌아간다.
+  redirect(input.groupId ? `/questions/groups/${input.groupId}` : "/questions");
 }
 
-export async function removeQuestion(id: string) {
+/** 지운 뒤 그 질문이 있던 그룹 화면으로 간다. */
+export async function removeQuestion(id: string, groupId: string) {
   const { id: userId } = await requireUser();
   await deleteQuestion(userId, id);
-  revalidatePath("/questions");
-  redirect("/questions");
+  revalidatePath("/questions", "layout");
+  redirect(`/questions/groups/${groupId}`);
 }

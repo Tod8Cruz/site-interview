@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { db } from "@/db";
 import { questions } from "@/db/schema";
 import {
@@ -15,8 +15,6 @@ import { resolveGroupId } from "./question-groups";
 export type QuestionFilter = {
   groupId?: string;
   q?: string;
-  category?: string;
-  tag?: string;
   limit?: number;
   offset?: number;
 };
@@ -32,8 +30,6 @@ function whereFor(userId: string, filter: QuestionFilter) {
     const pattern = `%${escapeLike(filter.q)}%`;
     conditions.push(or(ilike(questions.question, pattern), ilike(questions.modelAnswer, pattern))!);
   }
-  if (filter.category) conditions.push(eq(questions.category, filter.category));
-  if (filter.tag) conditions.push(sql`${filter.tag} = any(${questions.tags})`);
   return and(...conditions);
 }
 
@@ -105,20 +101,4 @@ export async function updateQuestion(userId: string, id: string, input: Question
 export async function deleteQuestion(userId: string, id: string) {
   const [row] = await db.delete(questions).where(owned(userId, id)).returning({ id: questions.id });
   return Boolean(row);
-}
-
-export async function listCategories(userId: string) {
-  const rows = await db
-    .selectDistinct({ category: questions.category })
-    .from(questions)
-    .where(and(eq(questions.userId, userId), isNotNull(questions.category)))
-    .orderBy(asc(questions.category));
-  return rows.map((r) => r.category as string);
-}
-
-export async function listTags(userId: string) {
-  const rows = await db.execute<{ tag: string }>(
-    sql`select distinct unnest(${questions.tags}) as tag from ${questions} where ${questions.userId} = ${userId} order by tag`,
-  );
-  return rows.rows.map((r) => r.tag);
 }

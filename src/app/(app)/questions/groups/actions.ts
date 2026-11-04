@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { formatZodError } from "@/lib/validation";
 import { requireUser } from "@/server/auth";
@@ -12,7 +13,7 @@ import {
   updateQuestionGroup,
 } from "@/server/question-groups";
 
-export type GroupFormState = { error?: string; savedAt?: number };
+export type GroupFormState = { error?: string };
 
 function failure(error: unknown): GroupFormState {
   if (error instanceof z.ZodError) return { error: formatZodError(error) };
@@ -24,18 +25,20 @@ function refresh() {
   revalidatePath("/questions", "layout");
 }
 
-/** id가 없으면 새 그룹을 만든다. 저장하면 savedAt이 바뀌어 새 그룹 입력칸을 비울 수 있다. */
+/** id가 없으면 새 그룹을 만들고 그 그룹 화면으로 간다. */
 export async function saveGroup(id: string | null, _prev: GroupFormState, formData: FormData): Promise<GroupFormState> {
   const { id: userId } = await requireUser();
   const input = { name: String(formData.get("name") ?? "") };
+  let createdId: string | null = null;
   try {
     if (id) await updateQuestionGroup(userId, id, input);
-    else await createQuestionGroup(userId, input);
+    else createdId = (await createQuestionGroup(userId, input)).id;
   } catch (error) {
     return failure(error);
   }
   refresh();
-  return { savedAt: Date.now() };
+  if (createdId) redirect(`/questions/groups/${createdId}`);
+  return {};
 }
 
 export async function makeDefaultGroup(id: string) {
@@ -44,6 +47,7 @@ export async function makeDefaultGroup(id: string) {
   refresh();
 }
 
+/** 지우면 그룹 목록으로 간다. 기본 그룹이면 오류를 돌려준다. */
 export async function removeGroup(id: string): Promise<GroupFormState> {
   const { id: userId } = await requireUser();
   try {
@@ -52,5 +56,5 @@ export async function removeGroup(id: string): Promise<GroupFormState> {
     return failure(error);
   }
   refresh();
-  return {};
+  redirect("/questions");
 }

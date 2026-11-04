@@ -1,9 +1,13 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // 지원자 정보는 설정 화면에서 별도 메뉴로 옮겼다.
   async redirects() {
-    return [{ source: "/settings/profiles/:path*", destination: "/profiles/:path*", permanent: true }];
+    return [
+      // 지원자 정보는 설정 화면에서 별도 메뉴로 옮겼다.
+      { source: "/settings/profiles/:path*", destination: "/profiles/:path*", permanent: true },
+      // 그룹 목록은 예상 질문 첫 화면이 되었다.
+      { source: "/questions/groups", destination: "/questions", permanent: false },
+    ];
   },
   turbopack: {
     resolveAlias: {

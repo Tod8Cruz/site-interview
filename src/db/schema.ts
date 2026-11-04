@@ -60,8 +60,6 @@ export const questions = pgTable(
       .references(() => questionGroups.id),
     question: text("question").notNull(),
     modelAnswer: text("model_answer").notNull().default(""),
-    category: text("category"),
-    tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
     sortOrder: integer("sort_order").notNull().default(0),
     ...timestamps,
   },

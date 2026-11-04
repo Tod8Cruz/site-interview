@@ -5,12 +5,12 @@
 | 단계 | 내용 |
 |------|------|
 | M1 | Next.js 16 + Drizzle/Postgres 스키마, 로그인(`proxy.ts`) |
-| M2 | 예상 질문 UI(검색·필터·답변 가리기) + 질문 API(`/api/v1/questions`, `/api/v1/categories`) |
+| M2 | 예상 질문 UI(검색·필터·답변 가리기) + 질문 API(`/api/v1/questions`) |
 | M3 | 프롬프트 여러 개 저장·기본값·턴 감지 설정, 시드 2개(부드러움 / STAR 깐깐함) |
 | M4 | Realtime 음성 면접(WebRTC), 턴 저장(단일 시계), 혼합 녹음 + IndexedDB 조각 보존, webm 탐색 보정, 1분 전 마무리 지시·시간 초과 종료, 응답 지연·사용량 계측 |
 | M5 | 다시 보기: 턴 클릭 이동, 턴별 메모(자동 저장)와 연결 질문 추천, 답변 길이·첫마디까지 걸린 시간, 재면접(전체/메모한 질문만), 기록 복사·마크다운 받기, 제목 수정, 미업로드 녹음 자동 복구 |
 | 추가 | 설정 > 지원자 정보 프로필(여러 개, 기본값). 면접 시작은 목록 화면의 모달에서 프로필·면접관·질문·목소리·시간을 고른다. 재면접 링크는 `/interviews?start=1&from={id}[&only=noted]` |
-| 추가 | API 토큰 발급·폐기(설정 > API 토큰, 해시만 저장), 로그인 없이 열리는 API 문서(`/api-docs`, AI용 마크다운 `/api/v1/docs`·`/llms.txt`), 일괄 추가(`POST /api/v1/questions/bulk`), 태그 목록(`/api/v1/tags`) |
+| 추가 | API 토큰 발급·폐기(설정 > API 토큰, 해시만 저장), 로그인 없이 열리는 API 문서(`/api-docs`, AI용 마크다운 `/api/v1/docs`·`/llms.txt`), 일괄 추가(`POST /api/v1/questions/bulk`) |
 | 추가 | 프롬프트·평가 기준 API(`/api/v1/prompts`, `/api/v1/rubrics` CRUD, `isDefault: true`로 기본값 지정, `/api/v1/voices` 목소리 목록). 질문 API와 같은 토큰을 쓴다 |
 | M6 | 서버 쪽 비용 상한(최대 시간+2분 hangup, 종료 시 hangup, 살아 있는 통화 재접속 거부), cron 가드, 방치 면접 정리, 연결 끊김 안내, 오류·404·로딩 화면, 삭제 시 Blob 정리 |
 | 추가 | 면접 일시정지·재개(R-10): 통화를 끝내고 누적 시간·질문 번호·녹음 구간을 저장, 이어하기 때 새 통화에 이전 대화를 주입. 연결 끊김도 일시정지로 처리 |
@@ -62,7 +62,7 @@ npm run dev
 전체 설명은 앱의 `/api-docs`(AI에게는 `/api/v1/docs` 또는 `/llms.txt` 마크다운)에 있다. 원문은 `src/lib/api-docs.ts` 한 곳이니 API를 바꾸면 같이 고친다.
 
 - 인증: `Authorization: Bearer <토큰>`. 토큰은 **설정 > API 토큰**에서 발급한다(만료 30일/90일/1년/없음, 원문은 발급 직후 한 번만 표시, DB엔 SHA-256 해시만 저장). 토큰은 발급한 계정의 데이터만 다룬다.
-- 예상 질문: `GET/POST /api/v1/questions`, `POST /api/v1/questions/bulk`(최대 100개, 전부 아니면 전무), `GET/PATCH/DELETE /api/v1/questions/{id}`, `GET /api/v1/categories`, `GET /api/v1/tags`
+- 예상 질문: `GET/POST /api/v1/questions`, `POST /api/v1/questions/bulk`(최대 100개, 전부 아니면 전무), `GET/PATCH/DELETE /api/v1/questions/{id}`
 - 프롬프트: `GET/POST /api/v1/prompts`, `GET/PATCH/DELETE /api/v1/prompts/{id}`, `GET /api/v1/voices`. 생성은 `name`·`content`만 필수, 나머지는 기본값
 - 평가 기준: `GET/POST /api/v1/rubrics`, `GET/PATCH/DELETE /api/v1/rubrics/{id}`. `criteria`는 배열 전체 교체
 - 프롬프트·평가 기준은 `PATCH`/`POST`에 `isDefault: true`를 보내 기본값으로 올린다(`false`는 거부). 첫 번째로 만든 것은 자동으로 기본값
@@ -70,7 +70,7 @@ npm run dev
 ```bash
 curl -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/questions?q=지원동기&limit=20"
 curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  "$BASE/api/v1/questions/bulk" -d '{"items":[{"question":"…","category":"인성"}]}'
+  "$BASE/api/v1/questions/bulk" -d '{"items":[{"question":"…"}]}'
 ```
 
 오류 형식: `{ "error": { "code": "validation_error" | "unauthorized" | "not_found" | …, "message": "…" } }`

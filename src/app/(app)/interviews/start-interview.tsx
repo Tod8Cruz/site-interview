@@ -9,7 +9,7 @@ import { VoiceOptions } from "@/components/voice-options";
 import { VoicePreviewButton } from "@/components/voice-preview-button";
 import { AudioDeviceCheck } from "@/components/audio-device-check";
 
-type QuestionOption = { id: string; groupId: string; question: string; category: string | null };
+type QuestionOption = { id: string; groupId: string; question: string };
 type GroupOption = { id: string; name: string; isDefault: boolean };
 type Mode = "all" | "manual" | "random";
 
@@ -258,7 +258,7 @@ function StartForm({
         <section>
           <div className="mb-1 flex items-center justify-between">
             <label className="label mb-0" htmlFor="questionGroup">질문 그룹</label>
-            <Link href="/questions/groups" className="text-xs text-primary underline">관리</Link>
+            <Link href="/questions" className="text-xs text-primary underline">관리</Link>
           </div>
           <select id="questionGroup" value={groupId} onChange={(e) => pickGroup(e.target.value)} className="input">
             {groups.map((g) => (
@@ -299,7 +299,7 @@ function StartForm({
                           else next.delete(q.id);
                           setManual(next);
                         }} />
-                      <span>{q.question}{q.category && <span className="chip ml-1.5">{q.category}</span>}</span>
+                      <span>{q.question}</span>
                     </label>
                   </li>
                 ))}

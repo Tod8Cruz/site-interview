@@ -52,7 +52,7 @@ export default async function InterviewsPage(props: PageProps<"/interviews">) {
     prompts,
     profiles,
     groups: groups.map((g) => ({ id: g.id, name: g.name, isDefault: g.isDefault })),
-    questions: questions.map((q) => ({ id: q.id, groupId: q.groupId, question: q.question, category: q.category })),
+    questions: questions.map((q) => ({ id: q.id, groupId: q.groupId, question: q.question })),
     prefill,
     autoOpen: start === "1",
   };

@@ -7,15 +7,15 @@ import { removeQuestion, saveQuestion, type QuestionFormState } from "./actions"
 
 type Props = {
   question?: Question;
-  categories: string[];
   groups: QuestionGroup[];
   /** 새 질문의 그룹. 질문 목록에서 보던 그룹이 넘어온다. */
   initialGroupId?: string;
 };
 
-export function QuestionForm({ question, categories, groups, initialGroupId }: Props) {
+export function QuestionForm({ question, groups, initialGroupId }: Props) {
   const save = saveQuestion.bind(null, question?.id ?? null);
   const [state, action, pending] = useActionState<QuestionFormState, FormData>(save, {});
+  const backGroupId = question?.groupId ?? initialGroupId;
 
   return (
     <form action={action} className="card space-y-4 p-5">
@@ -38,31 +38,16 @@ export function QuestionForm({ question, categories, groups, initialGroupId }: P
         <textarea id="modelAnswer" name="modelAnswer" rows={12} maxLength={20000}
           defaultValue={question?.modelAnswer} className="input font-mono" />
       </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div>
-          <label className="label" htmlFor="category">카테고리</label>
-          <input id="category" name="category" list="category-options" maxLength={100}
-            defaultValue={question?.category ?? ""} className="input" placeholder="예: 인성, 지원동기, 기술" />
-          <datalist id="category-options">
-            {categories.map((c) => <option key={c} value={c} />)}
-          </datalist>
-        </div>
-        <div>
-          <label className="label" htmlFor="tags">태그 <span className="font-normal text-muted">(쉼표로 구분)</span></label>
-          <input id="tags" name="tags" defaultValue={question?.tags.join(", ")} className="input"
-            placeholder="예: 협업, 경험" />
-        </div>
-      </div>
       {state.error && <p className="text-sm text-danger">{state.error}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <button type="submit" disabled={pending} className="btn btn-primary">{pending ? "저장 중…" : "저장"}</button>
-        <Link href="/questions" className="btn">취소</Link>
+        <Link href={backGroupId ? `/questions/groups/${backGroupId}` : "/questions"} className="btn">취소</Link>
         {question && (
           <button
             type="button"
             className="btn btn-danger ml-auto"
             onClick={async () => {
-              if (confirm("이 질문을 삭제할까요?")) await removeQuestion(question.id);
+              if (confirm("이 질문을 삭제할까요?")) await removeQuestion(question.id, question.groupId);
             }}
           >
             삭제

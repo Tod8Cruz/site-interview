@@ -2,72 +2,49 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { PageHeader } from "@/components/page-header";
 import { requireUser } from "@/server/auth";
-import { isUuid } from "@/server/http";
 import { listQuestionGroups } from "@/server/question-groups";
-import { listCategories, listQuestions, listTags } from "@/server/questions";
-import { QuestionList } from "./question-list";
+import { makeDefaultGroup } from "./groups/actions";
+import { NewGroupButton } from "./groups/group-forms";
 
-export default async function QuestionsPage(props: PageProps<"/questions">) {
+/** 예상 질문 첫 화면: 그룹 목록. 그룹을 누르면 그 그룹의 질문이 나온다. */
+export default async function QuestionGroupsPage() {
   await connection();
   const { id: userId } = await requireUser();
-  const sp = await props.searchParams;
-  const pick = (v: string | string[] | undefined) => (typeof v === "string" && v ? v : undefined);
-  const group = pick(sp.group);
-  const groupId = group && isUuid(group) ? group : undefined;
-  const filter = { groupId, q: pick(sp.q), category: pick(sp.category), tag: pick(sp.tag) };
-  const [{ items, total }, categories, tags, groups] = await Promise.all([
-    listQuestions(userId, filter),
-    listCategories(userId),
-    listTags(userId),
-    listQuestionGroups(userId),
-  ]);
-  const groupName = new Map(groups.map((g) => [g.id, g.name]));
-
+  const groups = await listQuestionGroups(userId);
   return (
     <>
       <PageHeader
         title="예상 질문"
-        description={`${total}개`}
-        actions={
-          <>
-            <Link href="/questions/groups" className="btn">그룹 관리</Link>
-            <Link href={groupId ? `/questions/new?group=${groupId}` : "/questions/new"} className="btn btn-primary">
-              질문 추가
-            </Link>
-          </>
-        }
+        description="질문을 그룹으로 묶어 관리합니다. 면접을 시작할 때 그룹을 고르고, 그 안에서 질문을 뽑습니다."
+        actions={<NewGroupButton />}
       />
-      <nav aria-label="질문 그룹" className="mb-3 flex flex-wrap gap-1.5">
-        {[{ id: undefined, name: "전체", questionCount: groups.reduce((n, g) => n + g.questionCount, 0) }, ...groups].map((g) => (
-          <Link
-            key={g.id ?? "all"}
-            href={g.id ? `/questions?group=${g.id}` : "/questions"}
-            aria-current={g.id === groupId ? "page" : undefined}
-            className={`btn btn-sm ${g.id === groupId ? "border-primary text-primary" : ""}`}
+      <ul className="grid gap-3 sm:grid-cols-2">
+        {groups.map((g) => (
+          <li
+            key={g.id}
+            className="card relative flex flex-col p-4 transition-colors hover:border-primary/50 hover:bg-surface-2/60 focus-within:ring-2 focus-within:ring-primary/30"
           >
-            {g.name} <span className="text-muted">{g.questionCount}</span>
-          </Link>
+            <div className="flex items-start justify-between gap-2">
+              {/* 카드 전체가 그룹 링크의 클릭 영역이 된다 */}
+              <Link
+                href={`/questions/groups/${g.id}`}
+                className="font-medium outline-none after:absolute after:inset-0 after:rounded-xl after:content-['']"
+              >
+                {g.name}
+              </Link>
+              {g.isDefault && <span className="chip shrink-0 bg-primary/15 text-primary">기본값</span>}
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-sm text-muted">질문 {g.questionCount}개</span>
+              {!g.isDefault && (
+                <form action={makeDefaultGroup.bind(null, g.id)} className="relative z-10 ml-auto">
+                  <button className="btn btn-sm">기본값으로</button>
+                </form>
+              )}
+            </div>
+          </li>
         ))}
-      </nav>
-      <form className="mb-4 flex flex-wrap gap-2">
-        {groupId && <input type="hidden" name="group" value={groupId} />}
-        <input name="q" defaultValue={filter.q} placeholder="질문·답변 검색" className="input min-w-0 flex-1 basis-48" />
-        <select name="category" defaultValue={filter.category ?? ""} className="input w-auto">
-          <option value="">모든 카테고리</option>
-          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <select name="tag" defaultValue={filter.tag ?? ""} className="input w-auto">
-          <option value="">모든 태그</option>
-          {tags.map((t) => <option key={t} value={t}>#{t}</option>)}
-        </select>
-        <button className="btn">찾기</button>
-        {(filter.q || filter.category || filter.tag) && (
-          <Link href={groupId ? `/questions?group=${groupId}` : "/questions"} className="btn">초기화</Link>
-        )}
-      </form>
-      <QuestionList
-        questions={items.map((q) => ({ ...q, groupName: groupId ? null : (groupName.get(q.groupId) ?? null) }))}
-      />
+      </ul>
     </>
   );
 }

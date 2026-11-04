@@ -1,24 +1,10 @@
 import { z } from "zod";
 
-const optionalCategory = z
-  .string()
-  .trim()
-  .max(100)
-  .nullish()
-  .transform((v) => (v ? v : null));
-
-const tags = z
-  .array(z.string().trim().min(1).max(50))
-  .max(20)
-  .transform((list) => Array.from(new Set(list)));
-
 export const questionCreateSchema = z.object({
   /** 비우면 기본 그룹에 들어간다. */
   groupId: z.uuid().optional(),
   question: z.string().trim().min(1, "질문을 입력하세요.").max(1000),
   modelAnswer: z.string().max(20000).default(""),
-  category: optionalCategory,
-  tags: tags.default([]),
   sortOrder: z.number().int().default(0),
 });
 
@@ -27,8 +13,6 @@ export const questionUpdateSchema = z
     groupId: z.uuid(),
     question: z.string().trim().min(1, "질문을 입력하세요.").max(1000),
     modelAnswer: z.string().max(20000),
-    category: optionalCategory,
-    tags,
     sortOrder: z.number().int(),
   })
   .partial()
@@ -47,8 +31,6 @@ export type QuestionBulkCreateInput = z.input<typeof questionBulkCreateSchema>;
 export const questionListQuerySchema = z.object({
   groupId: z.uuid().optional(),
   q: z.string().trim().optional(),
-  category: z.string().trim().optional(),
-  tag: z.string().trim().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });

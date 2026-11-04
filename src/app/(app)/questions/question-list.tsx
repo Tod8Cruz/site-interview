@@ -8,8 +8,7 @@ import type { Question } from "@/db/schema";
 /** 이 길이를 넘는 모범답안은 접어 두고 "더 보기"로 펼친다. */
 const COLLAPSE_CHARS = 400;
 
-/** groupName은 전체 보기에서만 채운다(그룹 하나를 볼 때는 칩이 중복이라). */
-export function QuestionList({ questions }: { questions: (Question & { groupName: string | null })[] }) {
+export function QuestionList({ questions, groupId }: { questions: Question[]; groupId: string }) {
   const [hideAnswers, setHideAnswers] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
@@ -17,7 +16,7 @@ export function QuestionList({ questions }: { questions: (Question & { groupName
   if (!questions.length) {
     return (
       <div className="card p-8 text-center text-sm text-muted">
-        질문이 없습니다. <Link href="/questions/new" className="text-primary underline">첫 질문을 추가</Link>하거나
+        질문이 없습니다. <Link href={`/questions/new?group=${groupId}`} className="text-primary underline">첫 질문을 추가</Link>하거나
         질문 API로 등록하세요.
       </div>
     );
@@ -59,13 +58,6 @@ export function QuestionList({ questions }: { questions: (Question & { groupName
               <li key={q.id} className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] md:gap-4">
                 <div className="min-w-0">
                   <p className="font-medium">{q.question}</p>
-                  {(q.groupName || q.category || q.tags.length > 0) && (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {q.groupName && <span className="chip bg-primary/10 text-primary">{q.groupName}</span>}
-                      {q.category && <span className="chip">{q.category}</span>}
-                      {q.tags.map((t) => <span key={t} className="chip">#{t}</span>)}
-                    </div>
-                  )}
                 </div>
                 <div className="min-w-0">
                   <p className="mb-1 text-xs font-medium text-muted md:hidden">모범답안</p>
